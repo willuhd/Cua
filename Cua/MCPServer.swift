@@ -182,10 +182,15 @@ final class MCPServer: NSObject {
         var headLen: Int
     }
     static func parseHTTPHead(_ data: Data) -> (HTTPReq, Int)? {
-        guard let s = String(data: data, encoding: .utf8) else { return nil }
-        guard let range = s.range(of: "\r\n\r\n") ?? s.range(of: "\n\n") else { return nil }
-        let head = String(s[..<range.upperBound])
-        let lines = head.components(separatedBy: "\r\n").filter { !$0.isEmpty }
+        // Find the blank line in raw bytes. Decoding the whole buffer as UTF-8 first meant
+        // any non-text prefix (a TLS ClientHello against http://, an h2 preface, garbage)
+        // never parsed, so the reader sat there until the peer gave up.
+        guard let sep = data.range(of: Data("\r\n\r\n".utf8)) ?? data.range(of: Data("\n\n".utf8)) else { return nil }
+        let headData = data[data.startIndex..<sep.upperBound]
+        guard let head = String(data: headData, encoding: .utf8) else { return nil }
+        let lines = head.components(separatedBy: "\n")
+            .map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
+            .filter { !$0.isEmpty }
         guard let first = lines.first else { return nil }
         let parts = first.split(separator: " ")
         guard parts.count >= 2 else { return nil }
@@ -195,8 +200,8 @@ final class MCPServer: NSObject {
             if kv.count == 2 { headers[kv[0].trimmingCharacters(in: .whitespaces).lowercased()] = kv[1].trimmingCharacters(in: .whitespaces) }
         }
         let len = Int(headers["content-length"] ?? "0") ?? 0
-        var headLen = head.utf8.count
-        // account for \n\n vs \r\n\r\n already counted in utf8; fine
+        // Byte count, not String count: headLen indexes into the raw buffer.
+        let headLen = headData.count
         return (HTTPReq(method: String(parts[0]), path: String(parts[1]), headers: headers, headLen: headLen), len)
     }
     static func iconBase64(pid: Int32) -> String {
