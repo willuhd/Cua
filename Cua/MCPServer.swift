@@ -122,6 +122,10 @@ final class MCPServer: NSObject {
                     accept(self.listenFd, ptr, &clen)
                 }
                 guard cfd >= 0 else { if self.listenFd < 0 { break }; if errno != EINTR { usleep(10000) }; continue }
+                // A client that hangs up before we finish replying must not take the app with
+                // it: send(2) on such a socket raises SIGPIPE, whose default action is death.
+                var nosig: Int32 = 1
+                setsockopt(cfd, SOL_SOCKET, SO_NOSIGPIPE, &nosig, socklen_t(MemoryLayout<Int32>.size))
                 self.queue.async { self.handleFd(cfd) }
             }
         }
