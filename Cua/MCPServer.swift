@@ -156,6 +156,9 @@ final class MCPServer: NSObject {
                 // Backpressure: past the cap, stop accepting and leave the rest in the kernel
                 // backlog rather than queueing fds we cannot service or close.
                 self.connGate.wait()
+                // Re-check after the wait: a port change can retire this loop while it is
+                // parked here, and the fd number may already belong to the new listener.
+                if self.acceptGeneration != gen { self.connGate.signal(); break }
                 var caddr = sockaddr()
                 var clen = socklen_t(MemoryLayout<sockaddr>.size)
                 let cfd = withUnsafeMutablePointer(to: &caddr) { ptr in
