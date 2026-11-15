@@ -289,7 +289,8 @@ final class MCPServer: NSObject {
             return
         }
         if req.method == "DELETE" {
-            // client closing session (handleFd closes the fd)
+            // Client closing a session: nothing to reply, but the fd is ours to close.
+            close(fd)
             return
         }
         guard req.method == "POST" else {
