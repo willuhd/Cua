@@ -83,6 +83,11 @@ final class MCPServer: NSObject {
     var queue = DispatchQueue(label: "cua.mcp", qos: .userInitiated)
     var onStateChange: (() -> Void)?
     var isRunning = false
+    // A peer that connects and then says nothing would otherwise pin a worker forever,
+    // so every socket gets read/write deadlines.
+    static let ioTimeout = timeval(tv_sec: 10, tv_usec: 0)
+    static let maxHeadBytes = 64 * 1024
+    static let maxBodyBytes = 8 * 1024 * 1024
 
     func start(port: UInt16) {
         // Same port already listening: keep the socket (a cancel+rebind on the same
@@ -138,16 +143,35 @@ final class MCPServer: NSObject {
         onStateChange?()
     }
     func handleFd(_ fd: Int32) {
+        var tv = Self.ioTimeout
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         var buf = Data()
         var chunk = [UInt8](repeating: 0, count: 65536)
         while true {
-            if let (req, bodyLen) = Self.parseHTTPHead(buf), buf.count >= req.headLen + bodyLen {
-                let body = buf.subdata(in: buf.startIndex + req.headLen..<buf.startIndex + req.headLen + bodyLen)
-                process(req: req, body: body, fd: fd)
+            if let (req, bodyLen) = Self.parseHTTPHead(buf) {
+                if bodyLen > Self.maxBodyBytes {
+                    send(fd, status: "413 Payload Too Large", body: Data("{\"error\":\"body too large\"}".utf8))
+                    return
+                }
+                if buf.count >= req.headLen + bodyLen {
+                    let body = buf.subdata(in: buf.startIndex + req.headLen..<buf.startIndex + req.headLen + bodyLen)
+                    process(req: req, body: body, fd: fd)
+                    return
+                }
+            } else if buf.count > Self.maxHeadBytes {
+                // Nothing resembling a head after 64 KB: stop buffering it forever.
+                send(fd, status: "431 Request Header Fields Too Large", body: Data("{\"error\":\"head too large\"}".utf8))
                 return
             }
             let n = recv(fd, &chunk, chunk.count, 0)
-            if n <= 0 { close(fd); return }
+            if n == 0 { close(fd); return }                 // peer finished sending
+            if n < 0 {
+                if errno == EINTR { continue }
+                // EAGAIN under SO_RCVTIMEO (peer went quiet) or a reset — drop it.
+                close(fd)
+                return
+            }
             buf.append(contentsOf: Array(chunk[0..<n]))
         }
     }
@@ -350,8 +374,9 @@ final class MCPServer: NSObject {
             let n = bytes.withUnsafeBufferPointer { ptr in
                 Darwin.send(fd, ptr.baseAddress! + sent, bytes.count - sent, 0)
             }
-            if n <= 0 { break }
-            sent += n
+            if n > 0 { sent += n; continue }
+            if n < 0 && errno == EINTR { continue }
+            break
         }
         if close { Darwin.close(fd) }
     }
