@@ -80,7 +80,11 @@ final class MCPServer: NSObject {
     var port: UInt16 = { let v = UserDefaults.standard.integer(forKey: "mcpPort"); return v == 0 ? 3060 : UInt16(v) }()
     var mcpSessions: [String: Date] = [:]
     var mcpLock = NSLock()
-    var queue = DispatchQueue(label: "cua.mcp", qos: .userInitiated)
+    var queue = DispatchQueue(label: "cua.mcp", qos: .userInitiated, attributes: .concurrent)
+    // CuaEngine drives real mouse/keyboard state and is not reentrant; tool calls (and
+    // lease changes) stay serialized here, off the socket queue.
+    let toolQueue = DispatchQueue(label: "cua.tools", qos: .userInitiated)
+    let connGate = DispatchSemaphore(value: 8)
     var onStateChange: (() -> Void)?
     var isRunning = false
     // A peer that connects and then says nothing would otherwise pin a worker forever,
@@ -121,17 +125,28 @@ final class MCPServer: NSObject {
         let acceptQ = DispatchQueue(label: "cua.accept", qos: .userInitiated)
         acceptQ.async { [weak self] in
             while let self = self, self.listenFd >= 0 {
+                // Backpressure: past the cap, stop accepting and leave the rest in the kernel
+                // backlog rather than queueing fds we cannot service or close.
+                self.connGate.wait()
                 var caddr = sockaddr()
                 var clen = socklen_t(MemoryLayout<sockaddr>.size)
                 let cfd = withUnsafeMutablePointer(to: &caddr) { ptr in
                     accept(self.listenFd, ptr, &clen)
                 }
-                guard cfd >= 0 else { if self.listenFd < 0 { break }; if errno != EINTR { usleep(10000) }; continue }
+                guard cfd >= 0 else {
+                    self.connGate.signal()
+                    if self.listenFd < 0 { break }
+                    if errno != EINTR { usleep(10000) }
+                    continue
+                }
                 // A client that hangs up before we finish replying must not take the app with
                 // it: send(2) on such a socket raises SIGPIPE, whose default action is death.
                 var nosig: Int32 = 1
                 setsockopt(cfd, SOL_SOCKET, SO_NOSIGPIPE, &nosig, socklen_t(MemoryLayout<Int32>.size))
-                self.queue.async { self.handleFd(cfd) }
+                self.queue.async {
+                    self.handleFd(cfd)
+                    self.connGate.signal()
+                }
             }
         }
     }
@@ -269,7 +284,7 @@ final class MCPServer: NSObject {
         if pathOnly == "/api/free" && req.method == "POST" {
             let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
             if let pid = (obj["pid"] as? Int) ?? (obj["pid"] as? Double).map({ Int($0) }) {
-                SessionStore.shared.free(pid: Int32(pid))
+                toolQueue.sync { SessionStore.shared.free(pid: Int32(pid)) }
                 onStateChange?()
             }
             send(fd, status: "200 OK", body: "{\"ok\":true}".data(using: .utf8)!, extraHeaders: [:])
@@ -382,9 +397,10 @@ final class MCPServer: NSObject {
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let args = (params["arguments"] as? [String: Any]) ?? [:]
-            // Dispatch on background queue is risky for UI-facing focus code (needs RunLoop? No, all
-            // blocking calls use usleep + SkyLight, safe off-main). Run synchronously here.
-            let result = CuaEngine.shared.dispatch(tool: name, params: args)
+            // Blocking, UI-facing work (captures, usleep-paced input) must not block the socket
+            // queue: the menubar UI polls /api/state while an agent call runs.
+            var result: [String: Any] = [:]
+            toolQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
             return (result, incomingSession)
         case "resources/list":
             return (["resources": []], incomingSession)
