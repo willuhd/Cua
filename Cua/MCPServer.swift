@@ -76,8 +76,34 @@ func invalidIdResult(_ reason: String) -> [String: Any] {
 // MARK: – MCP HTTP server (Network framework, loopback only)
 final class MCPServer: NSObject {
     static let shared = MCPServer()
-    var listenFd: Int32 = -1
-    var port: UInt16 = { let v = UserDefaults.standard.integer(forKey: "mcpPort"); return v == 0 ? 3060 : UInt16(v) }()
+    // The listening socket and port are written on the main thread (start/stop, /api/port) and
+    // read by the accept loop and the socket workers, so they are lock-backed. The generation
+    // counter retires a superseded accept loop before it can accept on a recycled fd number.
+    private let stateLock = NSLock()
+    private var _listenFd: Int32 = -1
+    private var _isRunning = false
+    private var _acceptGeneration = 0
+    var listenFd: Int32 {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _listenFd }
+        set { stateLock.lock(); _listenFd = newValue; stateLock.unlock() }
+    }
+    var isRunning: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _isRunning }
+        set { stateLock.lock(); _isRunning = newValue; stateLock.unlock() }
+    }
+    var acceptGeneration: Int {
+        stateLock.lock(); defer { stateLock.unlock() }; return _acceptGeneration
+    }
+    @discardableResult func bumpAcceptGeneration() -> Int {
+        stateLock.lock(); defer { stateLock.unlock() }
+        _acceptGeneration += 1
+        return _acceptGeneration
+    }
+    private var _port: UInt16 = { let v = UserDefaults.standard.integer(forKey: "mcpPort"); return v == 0 ? 3060 : UInt16(v) }()
+    var port: UInt16 {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _port }
+        set { stateLock.lock(); _port = newValue; stateLock.unlock() }
+    }
     var mcpSessions: [String: Date] = [:]
     var mcpLock = NSLock()
     var queue = DispatchQueue(label: "cua.mcp", qos: .userInitiated, attributes: .concurrent)
@@ -86,7 +112,6 @@ final class MCPServer: NSObject {
     let toolQueue = DispatchQueue(label: "cua.tools", qos: .userInitiated)
     let connGate = DispatchSemaphore(value: 8)
     var onStateChange: (() -> Void)?
-    var isRunning = false
     // A peer that connects and then says nothing would otherwise pin a worker forever,
     // so every socket gets read/write deadlines.
     static let ioTimeout = timeval(tv_sec: 10, tv_usec: 0)
@@ -123,19 +148,22 @@ final class MCPServer: NSObject {
         clog("listening 127.0.0.1:\(port)")
         onStateChange?()
         let acceptQ = DispatchQueue(label: "cua.accept", qos: .userInitiated)
+        let gen = bumpAcceptGeneration()
         acceptQ.async { [weak self] in
-            while let self = self, self.listenFd >= 0 {
+            while let self = self {
+                let lfd = self.listenFd
+                if lfd < 0 || self.acceptGeneration != gen { break }
                 // Backpressure: past the cap, stop accepting and leave the rest in the kernel
                 // backlog rather than queueing fds we cannot service or close.
                 self.connGate.wait()
                 var caddr = sockaddr()
                 var clen = socklen_t(MemoryLayout<sockaddr>.size)
                 let cfd = withUnsafeMutablePointer(to: &caddr) { ptr in
-                    accept(self.listenFd, ptr, &clen)
+                    accept(lfd, ptr, &clen)
                 }
                 guard cfd >= 0 else {
                     self.connGate.signal()
-                    if self.listenFd < 0 { break }
+                    if self.listenFd < 0 || self.acceptGeneration != gen { break }
                     if errno != EINTR { usleep(10000) }
                     continue
                 }
@@ -154,6 +182,7 @@ final class MCPServer: NSObject {
         let fd = listenFd
         listenFd = -1
         isRunning = false
+        bumpAcceptGeneration()          // retire the loop before the fd number can be reused
         if fd >= 0 { shutdown(fd, SHUT_RDWR); close(fd) }
         onStateChange?()
     }
