@@ -1,0 +1,127 @@
+name: Release DMG
+
+# Hand runs via the Run button (workflow_dispatch) or release tags
+# (push v*). The Run button only appears once this file is on the
+# default branch; after that, target other branches with the picker or
+# `gh workflow run --ref <branch>`.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Marketing version (CFBundleShortVersionString)"
+        required: true
+        default: "0.1"
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: Cua
+  PROJECT_FILE: Cua.xcodeproj
+  BUILD_TARGET: Cua
+  ARCHS: "arm64 x86_64"
+
+jobs:
+  dmg:
+    name: Build DMG
+    runs-on: macos-26
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Resolve version
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          test -n "$VERSION" || { echo "::error::empty version"; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "building version: $VERSION"
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          python3 --version
+
+      - name: Install dmgbuild
+        run: |
+          set -euo pipefail
+          pipx install dmgbuild || pipx upgrade dmgbuild
+          command -v dmgbuild
+
+      - name: Build app bundle
+        run: |
+          set -euo pipefail
+          # No shared scheme is committed, so build the target with
+          # SYMROOT (a -derivedDataPath flag requires a -scheme).
+          xcodebuild \
+            -project "${{ env.PROJECT_FILE }}" \
+            -target "${{ env.BUILD_TARGET }}" \
+            -configuration Release \
+            SYMROOT="$PWD/build" \
+            ARCHS="${{ env.ARCHS }}" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            DEVELOPMENT_TEAM= \
+            MARKETING_VERSION="$VERSION" \
+            build
+
+      - name: Ad-hoc sign the app bundle
+        run: |
+          set -euo pipefail
+          APP="$(find build -maxdepth 4 -name "${{ env.APP_NAME }}.app" -type d -print -quit)"
+          if [ -z "$APP" ]; then
+            echo "::error::${{ env.APP_NAME }}.app was not produced by the build"
+            exit 1
+          fi
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          echo "app bundle: $APP"
+
+          codesign --force --deep --options runtime --timestamp=none --sign - "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+
+          echo "--- signature ---"
+          codesign -dvvv "$APP" 2>&1 \
+            | grep -E "Authority|Signature|TeamIdentifier|flags=|Format" || true
+
+      - name: Build DMG
+        run: |
+          set -euo pipefail
+          .github/release/make-dmg.sh "$APP" "${{ env.APP_NAME }}-$VERSION.dmg"
+
+          echo "--- image ---"
+          hdiutil imageinfo "${{ env.APP_NAME }}-$VERSION.dmg" \
+            | grep -E "Format Description|Class Name|Total Bytes" || true
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ env.APP_NAME }}-*.dmg
+          archive: false
+          if-no-files-found: error
+
+      - name: Attach DMG to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          DMGS=(${{ env.APP_NAME }}-*.dmg)
+          [ "${#DMGS[@]}" -eq 1 ] || { echo "::error::expected exactly one DMG"; exit 1; }
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${DMGS[0]}" --clobber
+          else
+            gh release create "$TAG" "${DMGS[0]}" --title "$TAG" --generate-notes
+          fi
