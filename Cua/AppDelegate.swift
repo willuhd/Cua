@@ -15,10 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         ProcessInfo.processInfo.disableAutomaticTermination("menubar-mcp")
         NSApp.setActivationPolicy(.accessory)
-        // load menubar icon: AppIcon.icns doubles as the template (single icon file).
-        // Fall back to a simple arrow drawing if missing.
+        // load menubar icon: MenuIcon.png is the template (Finder icon is the
+        // Icon Composer AppIcon.icon, separate). Fall back to an arrow if missing.
         var img: NSImage?
-        if let path = Bundle.main.path(forResource: "AppIcon", ofType: "icns") {
+        if let path = Bundle.main.path(forResource: "MenuIcon", ofType: "png") {
             img = NSImage(contentsOfFile: path)
         }
         if let img = img {

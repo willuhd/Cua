@@ -7,9 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>Cua</string>
 	<key>CFBundleExecutable</key>
-	<string>cua</string>
-	<key>CFBundleIconFile</key>
-	<string>AppIcon.icns</string>
+	<string>Cua</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
@@ -32,9 +30,9 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Menubar MCP. Background computer-use for macOS.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
 </dict>
 </plist>
