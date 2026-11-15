@@ -154,7 +154,17 @@ final class MCPServer: NSObject {
                     send(fd, status: "413 Payload Too Large", body: Data("{\"error\":\"body too large\"}".utf8))
                     return
                 }
-                if buf.count >= req.headLen + bodyLen {
+                if Self.isChunked(req) {
+                    // Framing lives in the body, so keep reading until the terminator shows up.
+                    if buf.count > req.headLen + Self.maxBodyBytes {
+                        send(fd, status: "413 Payload Too Large", body: Data("{\"error\":\"body too large\"}".utf8))
+                        return
+                    }
+                    if let body = Self.decodeChunked(buf[buf.startIndex + req.headLen..<buf.endIndex]) {
+                        process(req: req, body: body, fd: fd)
+                        return
+                    }
+                } else if buf.count >= req.headLen + bodyLen {
                     let body = buf.subdata(in: buf.startIndex + req.headLen..<buf.startIndex + req.headLen + bodyLen)
                     process(req: req, body: body, fd: fd)
                     return
@@ -204,8 +214,27 @@ final class MCPServer: NSObject {
         let headLen = headData.count
         return (HTTPReq(method: String(parts[0]), path: String(parts[1]), headers: headers, headLen: headLen), len)
     }
-    static func iconBase64(pid: Int32) -> String {
-        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid }),
+    static func isChunked(_ req: HTTPReq) -> Bool {
+        (req.headers["transfer-encoding"] ?? "").lowercased().contains("chunked")
+    }
+    /// Decodes a `Transfer-Encoding: chunked` body. Returns nil while the terminating
+    /// chunk is still missing, so the caller keeps reading.
+    static func decodeChunked(_ data: Data) -> Data? {
+        var out = Data()
+        var i = data.startIndex
+        while true {
+            guard let lineEnd = data.range(of: Data("\r\n".utf8), in: i..<data.endIndex) else { return nil }
+            let line = String(decoding: data[i..<lineEnd.lowerBound], as: UTF8.self)
+            let token = line.split(separator: ";")[0].trimmingCharacters(in: .whitespaces)
+            guard let size = Int(token, radix: 16), size >= 0 else { return nil }
+            if size == 0 { return out }                     // last chunk (trailers ignored)
+            let start = lineEnd.upperBound
+            guard data.endIndex - start >= size + 2 else { return nil }
+            out.append(data[start..<start + size])
+            i = start + size + 2
+        }
+    }
+    static func iconBase64(pid: Int32) -> String {        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid }),
               let icon = app.icon else { return "" }
         let size = 40
         let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
