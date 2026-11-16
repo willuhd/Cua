@@ -50,6 +50,11 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
         let wm = WKWebViewConfiguration()
         wm.websiteDataStore = .nonPersistent()
         wm.userContentController.add(self, name: "cuaHeight")
+        let token = MCPServer.shared.uiToken.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let tokenScript = WKUserScript(source: "window.__CUA_UI_TOKEN = \"\(token)\"",
+                                       injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        wm.userContentController.addUserScript(tokenScript)
         webView = WKWebView(frame: .zero, configuration: wm)
         webView.underPageBackgroundColor = .clear
         webView.setValue(false, forKey: "drawsBackground")
