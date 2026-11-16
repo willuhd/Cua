@@ -545,6 +545,307 @@ final class CuaEngine {
                                structured: payload)
     }
 
+    func toolClick(params: [String: Any]) -> [String: Any] {
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
+        }
+        let space: CoordSpace
+        switch coordSpace(s, params) {
+        case .some(let v): space = v
+        case .none: return errorResult("BAD_ARGS", "invalid coordSpace")
+        }
+        let target: Target
+        switch resolveTarget(s, params, allowScreen: false) {
+        case .success(let value): target = value
+        case .failure(let f): return f.result
+        }
+        let mapped: MappedPoint
+        switch screenPoint(s, target: target, params: params, space: space) {
+        case .success(let p): mapped = p
+        case .failure(let f): return f.result
+        }
+        let foreground = s.scope == .foreground
+        let wantBG = params["bg"] as? Bool ?? true
+        if !foreground && !wantBG { return foregroundRequired().result }
+        let bg = foreground ? false : wantBG
+        let focus = foreground || (params["focus"] as? Bool ?? false)
+        let dbl = params["double"] as? Bool ?? false
+        let right = params["right"] as? Bool ?? false
+        let local = CGPoint(x: mapped.screen.x - target.bounds.minX, y: mapped.screen.y - target.bounds.minY)
+        let group = Int64(Date().timeIntervalSince1970 * 1000) % 100000
+
+        func send() {
+            if foreground { warpCursor(to: mapped.screen) }
+            let (downType, upType, button): (CGEventType, CGEventType, CGMouseButton) =
+                right ? (.rightMouseDown, .rightMouseUp, .right) : (.leftMouseDown, .leftMouseUp, .left)
+            let clicks = dbl ? 2 : 1
+            for i in 0..<clicks {
+                guard let down = CGEvent(mouseEventSource: nil, mouseType: downType,
+                                         mouseCursorPosition: mapped.screen, mouseButton: button),
+                      let up = CGEvent(mouseEventSource: nil, mouseType: upType,
+                                       mouseCursorPosition: mapped.screen, mouseButton: button) else { continue }
+                routeMouse(down, wid: target.wid, pid: s.pid, local: local, clickState: Int64(i + 1), group: group)
+                routeMouse(up, wid: target.wid, pid: s.pid, local: local, clickState: Int64(i + 1), group: group)
+                if bg {
+                    postToPid(down, pid: s.pid); usleep(30_000); postToPid(up, pid: s.pid)
+                } else {
+                    down.post(tap: .cghidEventTap); usleep(30_000); up.post(tap: .cghidEventTap)
+                }
+                if dbl && i == 0 { usleep(80_000) }
+            }
+        }
+        if foreground { send() }
+        else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, send) }
+        else { send() }
+        SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(mapped.screen.x), y: Double(mapped.screen.y))
+        var payload: [String: Any] = ["ok": true, "bg": bg, "scope": s.scope.rawValue,
+                                       "at": [Int(mapped.screen.x), Int(mapped.screen.y)],
+                                       "wid": Int(target.wid), "pid": Int(s.pid), "coordSpace": space.rawValue]
+        if foreground { payload["foreground"] = true }
+        return toolResultText(jsonText(payload), structured: payload)
+    }
+
+    func toolType(params: [String: Any]) -> [String: Any] {
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
+        }
+        guard let text = params["text"] as? String else { return errorResult("BAD_ARGS", "pass text") }
+        let foreground = s.scope == .foreground
+        let wantBG = params["bg"] as? Bool ?? true
+        if !foreground && !wantBG { return foregroundRequired().result }
+        let bg = foreground ? false : wantBG
+        let focus = foreground || (params["focus"] as? Bool ?? (s.scope == .window))
+        let target: Target
+        switch resolveTarget(s, params, allowScreen: true) {
+        case .success(let t): target = t
+        case .failure(let f): return f.result
+        }
+        let work = { typeText(text, pid: s.pid, bg: bg) }
+        if foreground { work() }
+        else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work) }
+        else { work() }
+        var payload: [String: Any] = ["ok": true, "typed": text.count, "bg": bg, "scope": s.scope.rawValue]
+        if foreground { payload["foreground"] = true }
+        return toolResultText(jsonText(payload), structured: payload)
+    }
+
+    func toolKey(params: [String: Any]) -> [String: Any] {
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
+        }
+        guard let code = pUInt16(params, "code") else { return errorResult("BAD_ARGS", "pass a valid key code 0...65535") }
+        let foreground = s.scope == .foreground
+        let wantBG = params["bg"] as? Bool ?? true
+        if !foreground && !wantBG { return foregroundRequired().result }
+        let bg = foreground ? false : wantBG
+        let focus = foreground || (params["focus"] as? Bool ?? (s.scope == .window))
+        let hold = clampInt(pInt(params, "holdMs"), 0, 10_000, bg ? 300 : 50)
+        var flags: CGEventFlags = []
+        if params["shift"] as? Bool ?? false { flags.insert(.maskShift) }
+        if params["ctrl"] as? Bool ?? false { flags.insert(.maskControl) }
+        if params["alt"] as? Bool ?? false { flags.insert(.maskAlternate) }
+        if params["cmd"] as? Bool ?? false { flags.insert(.maskCommand) }
+        if params["fn"] as? Bool ?? false { flags.insert(.maskSecondaryFn) }
+        let chr = params["char"] as? String
+        let target: Target
+        switch resolveTarget(s, params, allowScreen: true) {
+        case .success(let t): target = t
+        case .failure(let f): return f.result
+        }
+        let work = { postKey(code, pid: s.pid, bg: bg, holdMs: hold, flags: flags, char: chr) }
+        if foreground { work() }
+        else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work) }
+        else { work() }
+        var payload: [String: Any] = ["ok": true, "code": Int(code), "hold_ms": hold, "bg": bg]
+        if let chr = chr { payload["char"] = chr }
+        if foreground { payload["foreground"] = true }
+        return toolResultText(jsonText(payload), structured: payload)
+    }
+
+    func toolScroll(params: [String: Any]) -> [String: Any] {
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
+        }
+        let space: CoordSpace
+        switch coordSpace(s, params) {
+        case .some(let v): space = v
+        case .none: return errorResult("BAD_ARGS", "invalid coordSpace")
+        }
+        let target: Target
+        switch resolveTarget(s, params, allowScreen: false) {
+        case .success(let value): target = value
+        case .failure(let f): return f.result
+        }
+        let mapped: MappedPoint
+        switch screenPoint(s, target: target, params: params, space: space) {
+        case .success(let p): mapped = p
+        case .failure(let f): return f.result
+        }
+        let dx = pInt32(params, "dx") ?? 0
+        let dy = pInt32(params, "dy") ?? 0
+        let foreground = s.scope == .foreground
+        let wantBG = params["bg"] as? Bool ?? true
+        if !foreground && !wantBG { return foregroundRequired().result }
+        let bg = foreground ? false : wantBG
+        let focus = foreground || (params["focus"] as? Bool ?? false)
+        let local = CGPoint(x: mapped.screen.x - target.bounds.minX, y: mapped.screen.y - target.bounds.minY)
+        let work = {
+            guard let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                                  wheel1: dy, wheel2: dx, wheel3: 0) else { return }
+            e.location = mapped.screen
+            routeMouse(e, wid: target.wid, pid: s.pid, local: local, clickState: 0, group: 0)
+            if bg { postToPid(e, pid: s.pid) } else { e.post(tap: .cghidEventTap) }
+        }
+        if foreground { warpCursor(to: mapped.screen); work() }
+        else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work) }
+        else { work() }
+        var payload: [String: Any] = ["ok": true, "bg": bg, "dx": Int(dx), "dy": Int(dy),
+                                       "at": [Int(mapped.screen.x), Int(mapped.screen.y)], "coordSpace": space.rawValue]
+        if foreground { payload["foreground"] = true }
+        return toolResultText(jsonText(payload), structured: payload)
+    }
+
+    func toolDrag(params: [String: Any]) -> [String: Any] {
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
+        }
+        let space: CoordSpace
+        switch coordSpace(s, params) {
+        case .some(let v): space = v
+        case .none: return errorResult("BAD_ARGS", "invalid coordSpace")
+        }
+        let target: Target
+        switch resolveTarget(s, params, allowScreen: false) {
+        case .success(let value): target = value
+        case .failure(let f): return f.result
+        }
+        func parsePoint(_ prefix: String) -> (Double, Double)? {
+            if let x = pDouble(params, prefix + "X"), let y = pDouble(params, prefix + "Y") { return (x, y) }
+            if let raw = pString(params, prefix) {
+                let p = raw.split(separator: ",")
+                if p.count == 2, let x = Double(p[0].trimmingCharacters(in: .whitespaces)),
+                   let y = Double(p[1].trimmingCharacters(in: .whitespaces)) { return (x, y) }
+            }
+            return nil
+        }
+        guard let fromRaw = parsePoint("from"), let toRaw = parsePoint("to") else {
+            return errorResult("BAD_ARGS", "pass fromX/fromY + toX/toY or from/to")
+        }
+        let from: MappedPoint, to: MappedPoint
+        switch mapPoint(s, target: target, x: fromRaw.0, y: fromRaw.1, space: space) {
+        case .success(let p): from = p
+        case .failure(let f): return f.result
+        }
+        switch mapPoint(s, target: target, x: toRaw.0, y: toRaw.1, space: space) {
+        case .success(let p): to = p
+        case .failure(let f): return f.result
+        }
+        let foreground = s.scope == .foreground
+        let wantBG = params["bg"] as? Bool ?? true
+        if !foreground && !wantBG { return foregroundRequired().result }
+        let bg = foreground ? false : wantBG
+        let focus = foreground || (params["focus"] as? Bool ?? false)
+        let steps = clampInt(pInt(params, "steps"), 1, 120, 12)
+        let stepMs = clampInt(pInt(params, "stepMs"), 1, 200, 15)
+        let startHold = clampInt(pInt(params, "startHoldMs"), 0, 2000, 0)
+        let endHold = clampInt(pInt(params, "endHoldMs"), 0, 2000, 0)
+        let group = Int64(Date().timeIntervalSince1970 * 1000) % 100000
+
+        func event(_ type: CGEventType, _ p: CGPoint) -> CGEvent? {
+            let local = CGPoint(x: p.x - target.bounds.minX, y: p.y - target.bounds.minY)
+            guard let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left) else { return nil }
+            routeMouse(e, wid: target.wid, pid: s.pid, local: local, clickState: 1, group: group)
+            return e
+        }
+        func send(_ e: CGEvent) {
+            if bg { postToPid(e, pid: s.pid) } else { e.post(tap: .cghidEventTap) }
+        }
+        let work = {
+            if foreground { warpCursor(to: from.screen) }
+            if let d = event(.leftMouseDown, from.screen) { send(d) }
+            if startHold > 0 { usleep(UInt32(startHold * 1000)) }
+            for i in 1...steps {
+                let t = Double(i) / Double(steps)
+                let p = CGPoint(x: from.screen.x + (to.screen.x - from.screen.x) * t,
+                                y: from.screen.y + (to.screen.y - from.screen.y) * t)
+                if let e = event(.leftMouseDragged, p) { send(e) }
+                usleep(UInt32(stepMs * 1000))
+            }
+            if endHold > 0 { usleep(UInt32(endHold * 1000)) }
+            if let u = event(.leftMouseUp, to.screen) { send(u) }
+        }
+        if foreground { work() }
+        else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work) }
+        else { work() }
+        SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(to.screen.x), y: Double(to.screen.y))
+        var payload: [String: Any] = ["ok": true, "bg": bg, "steps": steps,
+                                       "from": [Int(from.screen.x), Int(from.screen.y)],
+                                       "to": [Int(to.screen.x), Int(to.screen.y)],
+                                       "coordSpace": space.rawValue]
+        if foreground { payload["foreground"] = true }
+        return toolResultText(jsonText(payload), structured: payload)
+    }
+
+    func toolAx(params: [String: Any]) -> [String: Any] {
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
+        }
+        let depth = clampInt(pInt(params, "depth"), 1, 64, 8)
+        let limit = clampInt(pInt(params, "maxNodes"), 1, 20_000, 4000)
+        var wid: UInt32? = nil
+        if s.scope != .app { wid = s.wid }
+        else if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
+        guard let text = axDump(sessionID: s.id, pid: s.pid, wid: wid, maxDepth: depth, limit: limit) else {
+            return errorResult("AX_UNAVAILABLE", "could not read the accessibility tree",
+                               extra: ["hint": "Grant Accessibility to Cua and make sure the window still exists."])
+        }
+        return toolResultText(text)
+    }
+
+    func toolPress(params: [String: Any]) -> [String: Any] {
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
+        }
+        guard let idx = pInt(params, "index") else { return errorResult("BAD_ARGS", "pass index") }
+        let depth = clampInt(pInt(params, "depth"), 1, 64, 8)
+        let limit = clampInt(pInt(params, "maxNodes"), 1, 20_000, 4000)
+        var wid: UInt32? = nil
+        if s.scope != .app { wid = s.wid }
+        else if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
+        guard AXIndexStore.shared.build(sessionID: s.id, pid: s.pid, wid: wid, maxDepth: depth, limit: limit),
+              let (nodes, _) = AXIndexStore.shared.nodes(sessionID: s.id) else {
+            return errorResult("AX_UNAVAILABLE", "could not build the accessibility tree")
+        }
+        guard idx >= 0, idx < nodes.count else {
+            return errorResult("BAD_INDEX", "index \(idx) is out of range 0...\(max(0, nodes.count - 1))")
+        }
+        let n = nodes[idx]
+        if let wantRole = pString(params, "expectRole"), wantRole != n.role {
+            return errorResult("GUARD_ROLE", "index \(idx) is \(n.role), expected \(wantRole)")
+        }
+        if let wantTitle = pString(params, "expectTitle"), !n.title.localizedCaseInsensitiveContains(wantTitle) {
+            return errorResult("GUARD_TITLE", "title mismatch at index \(idx)")
+        }
+        let r = AXUIElementPerformAction(n.ref, kAXPressAction as CFString)
+        let payload: [String: Any] = ["ok": r == .success, "index": idx, "role": n.role,
+                                       "title": String(n.title.prefix(60)), "ax_error": r.rawValue]
+        return toolResultText(jsonText(payload), isError: r != .success, structured: payload)
+    }
+
     func dispatch(tool: String, params: [String: Any]) -> [String: Any] {
         switch tool {
         case "list_apps": return toolListApps()
@@ -553,6 +854,13 @@ final class CuaEngine {
         case "release": return toolRelease(params: params)
         case "screenshot": return toolScreenshot(params: params)
         case "move": return toolMove(params: params)
+        case "click": return toolClick(params: params)
+        case "type": return toolType(params: params)
+        case "key": return toolKey(params: params)
+        case "scroll": return toolScroll(params: params)
+        case "drag": return toolDrag(params: params)
+        case "ax": return toolAx(params: params)
+        case "press": return toolPress(params: params)
         default: return errorResult("NO_SUCH_TOOL", "tool \(tool) does not exist")
         }
     }
