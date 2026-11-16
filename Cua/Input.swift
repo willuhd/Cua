@@ -28,6 +28,19 @@ func routeMouse(_ e: CGEvent, wid: UInt32, pid: Int32, local: CGPoint, clickStat
     e.setIntegerValueField(F(92), value: Int64(wid))
     e.setIntegerValueField(F(40), value: Int64(pid))
 }
+func warpCursor(to p: CGPoint) {
+    CGWarpMouseCursorPosition(p)
+    CGAssociateMouseAndMouseCursorPosition(1)
+}
+func currentCursorPosition() -> CGPoint? {
+    CGEvent(source: nil)?.location
+}
+func postMouseMoved(pid: Int32, wid: UInt32, local: CGPoint, screen: CGPoint, bg: Bool, group: Int64) {
+    guard let e = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                          mouseCursorPosition: screen, mouseButton: .left) else { return }
+    routeMouse(e, wid: wid, pid: pid, local: local, clickState: 0, group: group)
+    if bg { postToPid(e, pid: pid) } else { e.post(tap: .cghidEventTap) }
+}
 func postKey(_ code: UInt16, pid: Int32, bg: Bool, holdMs: Int, flags: CGEventFlags = [], char: String? = nil) {
     if let dn = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true) {
         dn.flags = flags
