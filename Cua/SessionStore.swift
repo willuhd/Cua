@@ -11,6 +11,7 @@ import Darwin
 enum LeaseScope: String {
     case app
     case window
+    case foreground
 }
 
 enum CoordSpace: String {
@@ -64,18 +65,31 @@ final class SessionStore {
             if let held = existing.first { return .failure(.held(held)) }
         case .window:
             guard let wid = wid, wid != 0 else { return .failure(.badRequest("window scope needs a wid")) }
-            if let held = existing.first(where: { $0.scope == .app }) {
+            if let held = existing.first(where: { $0.scope == .app || $0.scope == .foreground }) {
                 return .failure(.held(held))
             }
             if let held = existing.first(where: { $0.scope == .window && $0.wid == wid }) {
                 return .failure(.held(held))
             }
+        case .foreground:
+            if let held = existing.first { return .failure(.held(held)) }
         }
         let s = newSession(pid: pid, scope: scope, wid: (scope == .app ? nil : wid), coordSpace: coordSpace, agentLabel: agentLabel)
         byId[s.id] = s
         return .success(s)
     }
 
+    /// Foreground is a hard preemption: every existing background lease is
+    /// revoked before the foreground session is created. The caller must have
+    /// user approval and the global input lock already held.
+    func acquireForeground(pid: Int32, wid: UInt32, coordSpace: CoordSpace, agentLabel: String?) -> Session {
+        lock.lock(); defer { lock.unlock() }
+        byId.removeAll()
+        cursors.removeAll()
+        let s = newSession(pid: pid, scope: .foreground, wid: wid, coordSpace: coordSpace, agentLabel: agentLabel)
+        byId[s.id] = s
+        return s
+    }
 
     private func pidAlive(_ pid: Int32) -> Bool {
         if kill(pid, 0) == 0 { return true }

@@ -62,6 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown { popover.close() }
         else { popVC.reload(); popover.show(relativeTo: btn.bounds, of: btn, preferredEdge: .minY) }
     }
-    func applicationWillTerminate(_ notification: Notification) { MCPServer.shared.stop() }
+    func applicationWillTerminate(_ notification: Notification) {
+        ForegroundCoordinator.shared.stop()
+        MCPServer.shared.stop()
+    }
 }
 

@@ -72,6 +72,16 @@ func axWindowElement(pid: Int32, wid: UInt32) -> AXUIElement? {
     return nil
 }
 
+/// Raise a specific window and make its app frontmost. Used only by the
+/// user-approved foreground grant; background tools never call this.
+@discardableResult
+func raiseWindow(pid: Int32, wid: UInt32) -> Bool {
+    guard AXIsProcessTrusted() else { return false }
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    guard let window = axWindowElement(pid: pid, wid: wid) else { return false }
+    return AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success
+}
 func snapshotFocus(readKeyWindow: Bool = true) -> FocusSnapshot {
     var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: 0)
     _ = Sky.shared.SLPSGetFrontProcess?(&psn)

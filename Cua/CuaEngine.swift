@@ -15,48 +15,40 @@ struct ToolFailure: Error {
 final class CuaEngine {
     static let shared = CuaEngine()
 
-
+    // MARK: – parameter parsing (never trap on hostile JSON numbers)
     private func number(_ v: Any?) -> Double? {
         if let n = v as? NSNumber { return n.doubleValue }
         if let d = v as? Double, d.isFinite { return d }
         if let i = v as? Int { return Double(i) }
         return nil
     }
-
     private func pDouble(_ params: [String: Any], _ key: String) -> Double? {
         guard let d = number(params[key]), d.isFinite else { return nil }
         return d
     }
-
     private func pInt(_ params: [String: Any], _ key: String) -> Int? {
         guard let d = pDouble(params, key) else { return nil }
         return Int(exactly: d)
     }
-
     private func pUInt32(_ params: [String: Any], _ key: String) -> UInt32? {
         guard let d = pDouble(params, key), d >= 0, d <= Double(UInt32.max) else { return nil }
         return UInt32(d)
     }
-
     private func pUInt16(_ params: [String: Any], _ key: String) -> UInt16? {
         guard let d = pDouble(params, key), d >= 0, d <= Double(UInt16.max) else { return nil }
         return UInt16(d)
     }
-
     private func pInt32(_ params: [String: Any], _ key: String) -> Int32? {
         guard let d = pDouble(params, key), d >= Double(Int32.min), d <= Double(Int32.max) else { return nil }
         return Int32(d)
     }
-
     private func pString(_ params: [String: Any], _ key: String) -> String? {
         (params[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-
     private func clampInt(_ v: Int?, _ lo: Int, _ hi: Int, _ fallback: Int) -> Int {
         guard let v = v else { return fallback }
         return max(lo, min(hi, v))
     }
-
     private func clampDouble(_ v: Double?, _ lo: Double, _ hi: Double, _ fallback: Double) -> Double {
         guard let v = v, v.isFinite else { return fallback }
         return max(lo, min(hi, v))
@@ -65,7 +57,6 @@ final class CuaEngine {
     private func jsonText(_ obj: [String: Any]) -> String {
         String(decoding: jsonData(obj), as: UTF8.self)
     }
-
     private func errorResult(_ code: String, _ message: String, hint: String? = nil,
                              extra: [String: Any] = [:]) -> [String: Any] {
         var p: [String: Any] = ["code": code, "message": message]
@@ -73,12 +64,10 @@ final class CuaEngine {
         for (k, v) in extra { p[k] = v }
         return toolResultText(jsonText(p), isError: true, structured: p)
     }
-
     private func failure(_ code: String, _ message: String, hint: String? = nil,
                          extra: [String: Any] = [:]) -> ToolFailure {
         ToolFailure(result: errorResult(code, message, hint: hint, extra: extra))
     }
-
     private func globalActiveFailure() -> ToolFailure {
         let status = ForegroundCoordinator.shared.status()
         return failure("GLOBAL_FOREGROUND_ACTIVE",
@@ -86,7 +75,6 @@ final class CuaEngine {
                        hint: "End your turn or do work that does not use the desktop. Acquire a new lease after the foreground grant ends.",
                        extra: ["retryable": true, "suggested": "end_turn_or_non_desktop_work", "foreground": status])
     }
-
     private func foregroundRequired() -> ToolFailure {
         failure("FOREGROUND_REQUIRED",
                 "Global HID delivery is only available inside an approved foreground grant.",
@@ -94,7 +82,6 @@ final class CuaEngine {
     }
 
     // MARK: – target resolution
-
     func resolvePid(params: [String: Any]) -> Int32? {
         if let n = pInt(params, "pid") {
             guard n >= 0, n <= Int(Int32.max) else { return nil }
@@ -256,7 +243,6 @@ final class CuaEngine {
     }
 
     // MARK: – snapshots
-
     private func parseRegion(_ params: [String: Any]) -> Result<CGRect, ToolFailure> {
         guard let raw = params["region"] else {
             return .success(CGRect(x: 0, y: 0, width: 1, height: 1))
@@ -334,7 +320,6 @@ final class CuaEngine {
     }
 
     // MARK: – tool bodies
-
     func toolListApps() -> [String: Any] {
         let sessions = SessionStore.shared.sessions()
         let apps = runningApps().map { a -> [String: Any] in
@@ -500,6 +485,68 @@ final class CuaEngine {
         return toolResultImage(png: data, caption: caption, structured: payload)
     }
 
+    private func sourceForZoom(_ s: Session, target: Target, fresh: Bool) -> CGImage? {
+        if !fresh, let snap = SnapshotStore.shared.get(sessionID: s.id, wid: target.wid) { return snap.source }
+        return target.wid == 0 ? captureScreenImage() : captureWindowImage(wid: target.wid)
+    }
+
+    func toolZoom(params: [String: Any]) -> [String: Any] {
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
+        }
+        let space: CoordSpace
+        switch coordSpace(s, params) {
+        case .some(let v): space = v
+        case .none: return errorResult("BAD_ARGS", "invalid coordSpace")
+        }
+        let target: Target
+        switch resolveTarget(s, params, allowScreen: true) {
+        case .success(let value): target = value
+        case .failure(let f): return f.result
+        }
+        let part = (pString(params, "part") ?? "").lowercased()
+        let size = clampDouble(pDouble(params, "size"), 0.1, 1.0, part == "cursor" ? 0.25 : 0.5)
+        var center = CGPoint(x: 0.5, y: 0.5)
+        if part == "cursor", let c = SessionStore.shared.lastCursor(sessionID: s.id, wid: target.wid) {
+            center = normalizedFromScreen(CGPoint(x: c.0, y: c.1), bounds: target.bounds)
+        } else if part == "top-left" || part == "tl" { center = CGPoint(x: 0.25, y: 0.25) }
+        else if part == "top-right" || part == "tr" { center = CGPoint(x: 0.75, y: 0.25) }
+        else if part == "bottom-left" || part == "bl" { center = CGPoint(x: 0.25, y: 0.75) }
+        else if part == "bottom-right" || part == "br" { center = CGPoint(x: 0.75, y: 0.75) }
+        else if part == "center" { center = CGPoint(x: 0.5, y: 0.5) }
+        else if !part.isEmpty { return errorResult("BAD_ARGS", "part must be top-left, top-right, bottom-left, bottom-right, center, or cursor") }
+        if let (x, y) = rawPoint(params) {
+            switch mapPoint(s, target: target, x: x, y: y, space: space) {
+            case .success(let p): center = p.normalized
+            case .failure(let f): return f.result
+            }
+        }
+        var region = CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
+        region = region.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+        let fresh = params["fresh"] as? Bool ?? false
+        guard let source = sourceForZoom(s, target: target, fresh: fresh) else {
+            return errorResult("CAPTURE_FAILED", "could not capture the window",
+                               extra: ["hint": "Grant Screen Recording to Cua."])
+        }
+        let maxDim = clampInt(pInt(params, "maxDimension"), 64, 4000, 768)
+        guard let rendered = renderSnapshot(source: source, windowBounds: target.bounds, region: region,
+                                             maxDimension: maxDim, grid: 0, cursor: nil,
+                                             coordSpace: space),
+              let data = pngData(from: rendered.image) else {
+            return errorResult("RENDER_FAILED", "could not render zoom")
+        }
+        let snap = Snapshot(id: UUID().uuidString.prefix(8).lowercased(), sessionID: s.id, wid: target.wid,
+                            source: source, windowBounds: target.bounds, region: region,
+                            imageWidth: rendered.width, imageHeight: rendered.height,
+                            coordSpace: space, capturedAt: Date())
+        SnapshotStore.shared.save(snap)
+        let payload = snapshotPayload(snap, data: data, pid: s.pid)
+        let caption = "zoom wid=\(target.wid) part=\(part.isEmpty ? "at" : part) image=\(rendered.width)x\(rendered.height) bytes=\(data.count)"
+        return toolResultImage(png: data, caption: caption, structured: payload)
+    }
+
     func toolMove(params: [String: Any]) -> [String: Any] {
         let s: Session
         switch requireLease(params: params) {
@@ -542,6 +589,69 @@ final class CuaEngine {
         payload["cursor"] = [Int(mapped.screen.x), Int(mapped.screen.y)]
         payload["coordSpace"] = space.rawValue
         return toolResultImage(png: data, caption: "cursor=\(Int(mapped.screen.x)),\(Int(mapped.screen.y)) wid=\(target.wid)",
+                               structured: payload)
+    }
+
+    func toolHover(params: [String: Any]) -> [String: Any] {
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
+        }
+        let space: CoordSpace
+        switch coordSpace(s, params) {
+        case .some(let v): space = v
+        case .none: return errorResult("BAD_ARGS", "invalid coordSpace")
+        }
+        let target: Target
+        switch resolveTarget(s, params, allowScreen: false) {
+        case .success(let value): target = value
+        case .failure(let f): return f.result
+        }
+        let mapped: MappedPoint
+        if let (x, y) = rawPoint(params) {
+            switch mapPoint(s, target: target, x: x, y: y, space: space) {
+            case .success(let p): mapped = p
+            case .failure(let f): return f.result
+            }
+        } else if let c = SessionStore.shared.lastCursor(sessionID: s.id, wid: target.wid) {
+            mapped = MappedPoint(screen: CGPoint(x: c.0, y: c.1), normalized: normalizedFromScreen(CGPoint(x: c.0, y: c.1), bounds: target.bounds))
+        } else {
+            return errorResult("BAD_ARGS", "pass x,y or at, or move the cursor first")
+        }
+        let foreground = s.scope == .foreground
+        let wantBG = params["bg"] as? Bool ?? true
+        if !foreground && !wantBG { return foregroundRequired().result }
+        let bg = foreground ? false : wantBG
+        let focus = foreground || (params["focus"] as? Bool ?? false)
+        let local = CGPoint(x: mapped.screen.x - target.bounds.minX, y: mapped.screen.y - target.bounds.minY)
+        let group = Int64(Date().timeIntervalSince1970 * 1000) % 100000
+        if foreground {
+            warpCursor(to: mapped.screen)
+            postMouseMoved(pid: s.pid, wid: target.wid, local: local, screen: mapped.screen, bg: false, group: group)
+        } else {
+            let work = { postMouseMoved(pid: s.pid, wid: target.wid, local: local, screen: mapped.screen, bg: bg, group: group) }
+            if focus {
+                _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work)
+            } else { work() }
+        }
+        usleep(80_000)
+        SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(mapped.screen.x), y: Double(mapped.screen.y))
+        let grid = clampInt(pInt(params, "grid"), 0, 1000, 0)
+        let captured = captureSnapshot(s, target: target, region: CGRect(x: 0, y: 0, width: 1, height: 1),
+                                       maxDimension: 1600, grid: grid,
+                                       cursor: (Double(mapped.screen.x), Double(mapped.screen.y)),
+                                       space: space)
+        let snap: Snapshot, data: Data
+        switch captured {
+        case .success(let value): snap = value.0; data = value.1
+        case .failure(let f): return f.result
+        }
+        var payload = snapshotPayload(snap, data: data, pid: s.pid)
+        payload["hover"] = true
+        payload["cursor"] = [Int(mapped.screen.x), Int(mapped.screen.y)]
+        payload["coordSpace"] = space.rawValue
+        return toolResultImage(png: data, caption: "hover=\(Int(mapped.screen.x)),\(Int(mapped.screen.y)) wid=\(target.wid)",
                                structured: payload)
     }
 
@@ -846,129 +956,59 @@ final class CuaEngine {
         return toolResultText(jsonText(payload), isError: r != .success, structured: payload)
     }
 
-    private func sourceForZoom(_ s: Session, target: Target, fresh: Bool) -> CGImage? {
-        if !fresh, let snap = SnapshotStore.shared.get(sessionID: s.id, wid: target.wid) { return snap.source }
-        return target.wid == 0 ? captureScreenImage() : captureWindowImage(wid: target.wid)
+    func toolRequestForeground(params: [String: Any]) -> [String: Any] {
+        guard let pid = resolvePid(params: params) else { return errorResult("NO_TARGET", "pass pid or app") }
+        if ForegroundCoordinator.shared.isActive {
+            return globalActiveFailure().result
+        }
+        let wid = pUInt32(params, "wid") ?? defaultWid(pid: pid) ?? 0
+        guard wid != 0, windowOwnerPid(wid: wid) == pid else {
+            return errorResult("NO_WINDOW", "foreground needs a target window owned by this pid")
+        }
+        let spaceRaw = pString(params, "coordSpace") ?? CoordSpace.norm1000.rawValue
+        guard let space = CoordSpace(rawValue: spaceRaw) else {
+            return errorResult("BAD_ARGS", "coordSpace must be image, norm1000, norm1, or screen")
+        }
+        let duration = clampInt(pInt(params, "durationMs"), 10_000, 300_000, 30_000)
+        let reason = String((pString(params, "reason") ?? "Foreground control requested").prefix(160))
+        let agent = pString(params, "agentLabel") ?? "agent"
+        do {
+            let result = try ForegroundCoordinator.shared.request(pid: pid, wid: wid, appName: appNameForPid(pid),
+                                                                  agent: agent, reason: reason,
+                                                                  durationMs: duration, coordSpace: space)
+            let payload: [String: Any] = ["ok": true, "foregroundGrantId": result.sessionID,
+                                           "acquisitionId": result.sessionID, "pid": Int(pid), "wid": Int(wid),
+                                           "app": appNameForPid(pid), "coordSpace": space.rawValue,
+                                           "expiresAt": Int(result.expiresAt.timeIntervalSince1970 * 1000)]
+            return toolResultText(jsonText(payload), structured: payload)
+        } catch ForegroundRequestError.busy {
+            return globalActiveFailure().result
+        } catch ForegroundRequestError.denied {
+            return errorResult("FOREGROUND_DENIED", "the user denied the foreground request",
+                               extra: ["suggested": "keep working in the background or end your turn"])
+        } catch ForegroundRequestError.timeout {
+            return errorResult("FOREGROUND_TIMEOUT", "the user did not approve the foreground request in time",
+                               extra: ["retryable": true])
+        } catch ForegroundRequestError.targetGone {
+            return errorResult("WINDOW_GONE", "the target window disappeared before approval")
+        } catch {
+            return errorResult("FOREGROUND_FAILED", "could not enter foreground mode")
+        }
     }
 
-    func toolZoom(params: [String: Any]) -> [String: Any] {
-        let s: Session
-        switch requireLease(params: params) {
-        case .success(let value): s = value
-        case .failure(let f): return f.result
-        }
-        let space: CoordSpace
-        switch coordSpace(s, params) {
-        case .some(let v): space = v
-        case .none: return errorResult("BAD_ARGS", "invalid coordSpace")
-        }
-        let target: Target
-        switch resolveTarget(s, params, allowScreen: true) {
-        case .success(let value): target = value
-        case .failure(let f): return f.result
-        }
-        let part = (pString(params, "part") ?? "").lowercased()
-        let size = clampDouble(pDouble(params, "size"), 0.1, 1.0, part == "cursor" ? 0.25 : 0.5)
-        var center = CGPoint(x: 0.5, y: 0.5)
-        if part == "cursor", let c = SessionStore.shared.lastCursor(sessionID: s.id, wid: target.wid) {
-            center = normalizedFromScreen(CGPoint(x: c.0, y: c.1), bounds: target.bounds)
-        } else if part == "top-left" || part == "tl" { center = CGPoint(x: 0.25, y: 0.25) }
-        else if part == "top-right" || part == "tr" { center = CGPoint(x: 0.75, y: 0.25) }
-        else if part == "bottom-left" || part == "bl" { center = CGPoint(x: 0.25, y: 0.75) }
-        else if part == "bottom-right" || part == "br" { center = CGPoint(x: 0.75, y: 0.75) }
-        else if part == "center" { center = CGPoint(x: 0.5, y: 0.5) }
-        else if !part.isEmpty { return errorResult("BAD_ARGS", "part must be top-left, top-right, bottom-left, bottom-right, center, or cursor") }
-        if let (x, y) = rawPoint(params) {
-            switch mapPoint(s, target: target, x: x, y: y, space: space) {
-            case .success(let p): center = p.normalized
-            case .failure(let f): return f.result
-            }
-        }
-        var region = CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
-        region = region.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
-        let fresh = params["fresh"] as? Bool ?? false
-        guard let source = sourceForZoom(s, target: target, fresh: fresh) else {
-            return errorResult("CAPTURE_FAILED", "could not capture the window",
-                               extra: ["hint": "Grant Screen Recording to Cua."])
-        }
-        let maxDim = clampInt(pInt(params, "maxDimension"), 64, 4000, 768)
-        guard let rendered = renderSnapshot(source: source, windowBounds: target.bounds, region: region,
-                                             maxDimension: maxDim, grid: 0, cursor: nil,
-                                             coordSpace: space),
-              let data = pngData(from: rendered.image) else {
-            return errorResult("RENDER_FAILED", "could not render zoom")
-        }
-        let snap = Snapshot(id: UUID().uuidString.prefix(8).lowercased(), sessionID: s.id, wid: target.wid,
-                            source: source, windowBounds: target.bounds, region: region,
-                            imageWidth: rendered.width, imageHeight: rendered.height,
-                            coordSpace: space, capturedAt: Date())
-        SnapshotStore.shared.save(snap)
-        let payload = snapshotPayload(snap, data: data, pid: s.pid)
-        let caption = "zoom wid=\(target.wid) part=\(part.isEmpty ? "at" : part) image=\(rendered.width)x\(rendered.height) bytes=\(data.count)"
-        return toolResultImage(png: data, caption: caption, structured: payload)
+    func toolForegroundStatus(params: [String: Any]) -> [String: Any] {
+        let payload = ForegroundCoordinator.shared.status()
+        return toolResultText(jsonText(payload), structured: payload)
     }
 
-    func toolHover(params: [String: Any]) -> [String: Any] {
-        let s: Session
-        switch requireLease(params: params) {
-        case .success(let value): s = value
-        case .failure(let f): return f.result
+    func toolReleaseForeground(params: [String: Any]) -> [String: Any] {
+        guard let id = pString(params, "acquisitionId") ?? pString(params, "foregroundGrantId") else {
+            return invalidIdResult("missing foreground grant id")
         }
-        let space: CoordSpace
-        switch coordSpace(s, params) {
-        case .some(let v): space = v
-        case .none: return errorResult("BAD_ARGS", "invalid coordSpace")
+        if ForegroundCoordinator.shared.release(sessionID: id) {
+            return toolResultText("{\"ok\":true}")
         }
-        let target: Target
-        switch resolveTarget(s, params, allowScreen: false) {
-        case .success(let value): target = value
-        case .failure(let f): return f.result
-        }
-        let mapped: MappedPoint
-        if let (x, y) = rawPoint(params) {
-            switch mapPoint(s, target: target, x: x, y: y, space: space) {
-            case .success(let p): mapped = p
-            case .failure(let f): return f.result
-            }
-        } else if let c = SessionStore.shared.lastCursor(sessionID: s.id, wid: target.wid) {
-            mapped = MappedPoint(screen: CGPoint(x: c.0, y: c.1), normalized: normalizedFromScreen(CGPoint(x: c.0, y: c.1), bounds: target.bounds))
-        } else {
-            return errorResult("BAD_ARGS", "pass x,y or at, or move the cursor first")
-        }
-        let foreground = s.scope == .foreground
-        let wantBG = params["bg"] as? Bool ?? true
-        if !foreground && !wantBG { return foregroundRequired().result }
-        let bg = foreground ? false : wantBG
-        let focus = foreground || (params["focus"] as? Bool ?? false)
-        let local = CGPoint(x: mapped.screen.x - target.bounds.minX, y: mapped.screen.y - target.bounds.minY)
-        let group = Int64(Date().timeIntervalSince1970 * 1000) % 100000
-        if foreground {
-            warpCursor(to: mapped.screen)
-            postMouseMoved(pid: s.pid, wid: target.wid, local: local, screen: mapped.screen, bg: false, group: group)
-        } else {
-            let work = { postMouseMoved(pid: s.pid, wid: target.wid, local: local, screen: mapped.screen, bg: bg, group: group) }
-            if focus {
-                _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work)
-            } else { work() }
-        }
-        usleep(80_000)
-        SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(mapped.screen.x), y: Double(mapped.screen.y))
-        let grid = clampInt(pInt(params, "grid"), 0, 1000, 0)
-        let captured = captureSnapshot(s, target: target, region: CGRect(x: 0, y: 0, width: 1, height: 1),
-                                       maxDimension: 1600, grid: grid,
-                                       cursor: (Double(mapped.screen.x), Double(mapped.screen.y)),
-                                       space: space)
-        let snap: Snapshot, data: Data
-        switch captured {
-        case .success(let value): snap = value.0; data = value.1
-        case .failure(let f): return f.result
-        }
-        var payload = snapshotPayload(snap, data: data, pid: s.pid)
-        payload["hover"] = true
-        payload["cursor"] = [Int(mapped.screen.x), Int(mapped.screen.y)]
-        payload["coordSpace"] = space.rawValue
-        return toolResultImage(png: data, caption: "hover=\(Int(mapped.screen.x)),\(Int(mapped.screen.y)) wid=\(target.wid)",
-                               structured: payload)
+        return invalidIdResult("foreground grant is not active")
     }
 
     func dispatch(tool: String, params: [String: Any]) -> [String: Any] {
@@ -988,6 +1028,9 @@ final class CuaEngine {
         case "drag": return toolDrag(params: params)
         case "ax": return toolAx(params: params)
         case "press": return toolPress(params: params)
+        case "request_foreground": return toolRequestForeground(params: params)
+        case "foreground_status": return toolForegroundStatus(params: params)
+        case "release_foreground": return toolReleaseForeground(params: params)
         default: return errorResult("NO_SUCH_TOOL", "tool \(tool) does not exist")
         }
     }
