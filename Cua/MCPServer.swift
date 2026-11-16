@@ -432,6 +432,8 @@ final class MCPServer: NSObject {
             let perms = (ax && scr) ? "Permissions OK (Accessibility + Screen Recording)." : "Missing: \(missing). Grant as Cua.app via the button below."
             let payload: [String: Any] = ["port": Int(port), "url": "http://127.0.0.1:\(port)/mcp", "perms": perms,
                                           "ax": ax, "scr": scr, "sessions": sessions,
+                                          "appIcon": iconBase64Cached(pid: getpid()),
+                                          "appPath": Bundle.main.bundleURL.path,
                                           "foreground": ForegroundCoordinator.shared.status()]
             send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: ["Cache-Control": "no-store"])
             return

@@ -28,11 +28,36 @@ let webUIHTML: String = {
     return "<!DOCTYPE html><html><body><h1>Cua</h1><p>UI file (index.html) not found. Server is running.</p></body></html>"
 }()
 
+// MARK: – native drag source for the permission icon
+final class AppDragView: NSView, NSDraggingSource {
+    let fileURL: URL
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        let item = NSPasteboardItem()
+        item.setString(fileURL.absoluteString, forType: .fileURL)
+        let drag = NSDraggingItem(pasteboardWriter: item)
+        let icon = NSWorkspace.shared.icon(forFile: fileURL.path)
+        icon.size = NSSize(width: 32, height: 32)
+        drag.setDraggingFrame(bounds, contents: icon)
+        beginDraggingSession(with: [drag], event: event, source: self)
+    }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {}
+}
+
 // MARK: – menubar UI
 final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHandler {
     var webView: WKWebView!
     var heightConstraint: NSLayoutConstraint!
     var onHeight: ((CGFloat) -> Void)?
+    private var permDrag: AppDragView?
 
     func url() -> URL { URL(string: "http://127.0.0.1:\(MCPServer.shared.port)/")! }
 
@@ -50,6 +75,7 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
         let wm = WKWebViewConfiguration()
         wm.websiteDataStore = .nonPersistent()
         wm.userContentController.add(self, name: "cuaHeight")
+        wm.userContentController.add(self, name: "cuaPermRect")
         let token = MCPServer.shared.uiToken.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         let tokenScript = WKUserScript(source: "window.__CUA_UI_TOKEN = \"\(token)\"",
@@ -93,6 +119,26 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
             onHeight?(h)
             return
         }
+        guard message.name == "cuaPermRect", let dict = message.body as? [String: Any] else { return }
+        let show = (dict["show"] as? Bool) ?? ((dict["show"] as? NSNumber)?.boolValue ?? false)
+        guard show,
+              let x = (dict["x"] as? NSNumber)?.doubleValue,
+              let y = (dict["y"] as? NSNumber)?.doubleValue,
+              let w = (dict["width"] as? NSNumber)?.doubleValue,
+              let h = (dict["height"] as? NSNumber)?.doubleValue,
+              w > 0, h > 0 else {
+            permDrag?.isHidden = true
+            return
+        }
+        if permDrag == nil {
+            let drag = AppDragView(fileURL: Bundle.main.bundleURL)
+            drag.autoresizingMask = []
+            view.addSubview(drag, positioned: .above, relativeTo: webView)
+            permDrag = drag
+        }
+        let top = webView.bounds.height - CGFloat(y) - CGFloat(h)
+        permDrag?.frame = NSRect(x: CGFloat(x), y: top, width: CGFloat(w), height: CGFloat(h))
+        permDrag?.isHidden = false
     }
 
     func probe() {

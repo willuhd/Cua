@@ -132,11 +132,35 @@ function postHeight(){
     window.webkit.messageHandlers.cuaHeight.postMessage(h);
   }
 }
+function sendPermRect(show, rect){
+  if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.cuaPermRect) return;
+  if (!show || !rect) { window.webkit.messageHandlers.cuaPermRect.postMessage({show:false}); return; }
+  window.webkit.messageHandlers.cuaPermRect.postMessage({
+    show:true, x:rect.left, y:rect.top, width:rect.width, height:rect.height
+  });
+}
 function renderPerms(s){
   const P = $('perms');
-  if (s.ax && s.scr) { P.replaceChildren(); return; }
+  if (s.ax && s.scr) { P.replaceChildren(); sendPermRect(false); return; }
   P.replaceChildren();
+
   const card = el('div','perm-card');
+  const iconWrap = el('div','perm-icon');
+  if (s.appIcon) {
+    const img = el('img');
+    img.src = 'data:image/png;base64,' + s.appIcon;
+    img.alt = 'Cua';
+    img.draggable = true;
+    img.title = 'Drag Cua.app into the permission list';
+    img.addEventListener('dragstart', ev => {
+      if (!s.appPath) return;
+      const uri = encodeURI('file://' + (s.appPath.startsWith('/') ? s.appPath : '/' + s.appPath));
+      ev.dataTransfer.setData('text/uri-list', uri);
+      ev.dataTransfer.setData('text/plain', s.appPath);
+      ev.dataTransfer.effectAllowed = 'copy';
+    });
+    iconWrap.append(img);
+  }
   const rows = el('div','perm-rows');
   for (const r of [{ok:s.scr, label:'Screen Recording'}, {ok:s.ax, label:'Accessibility'}]) {
     const d = el('div','perm-row');
@@ -144,8 +168,9 @@ function renderPerms(s){
     d.append(st, document.createTextNode(r.label));
     rows.append(d);
   }
-  card.append(rows);
+  card.append(iconWrap, rows);
   P.append(card);
+
   const actions = el('div','perm-actions');
   const open = el('button', null, 'Open Settings'); open.type = 'button';
   open.onclick = async () => { await postJSON('/api/open-settings', {}); };
@@ -153,6 +178,10 @@ function renderPerms(s){
   grant.onclick = async () => { await postJSON('/api/grant', {}); setTimeout(refresh, 900); };
   actions.append(open, grant);
   P.append(actions);
+  requestAnimationFrame(() => {
+    if (s.appIcon) sendPermRect(true, iconWrap.getBoundingClientRect());
+    else sendPermRect(false);
+  });
 }
 function freeSession(s){
   return postJSON('/api/free', s.scope === 'window' ? {pid:s.pid, wid:s.wid} : {pid:s.pid}).then(refresh);
