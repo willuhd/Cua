@@ -36,27 +36,30 @@ func toolDefs() -> [[String: Any]] {
     let appProp: [String: Any] = ["type": "string", "description": "App name or bundle id (alternative to pid)"]
     let idProp: [String: Any] = ["type": "string", "description": "acquisitionId from acquire — required on every call after acquire"]
     let widProp: [String: Any] = ["type": "number", "description": "Window id. App leases default to the main window; window leases are fixed to their wid."]
-    let bgProp: [String: Any] = ["type": "boolean", "description": "Background delivery (default true)."]
+    let bgProp: [String: Any] = ["type": "boolean", "description": "Background delivery (default true). false requires an approved foreground grant."]
     let focusProp: [String: Any] = ["type": "boolean", "description": "Briefly take key focus via focus-without-raise, then restore exact window (default false)"]
     let coordProp: [String: Any] = ["type": "string", "enum": ["image", "norm1000", "norm1", "screen"],
-                                   "description": "Coordinate space. Lease default is set by acquire (norm1000 unless overridden). image = pixels in the last screenshot/zoom; norm1000 = 0...1000 window-relative; norm1 = 0...1; screen = absolute points (app leases only)."]
+                                   "description": "Coordinate space. Lease default is set by acquire (norm1000 unless overridden). image = pixels in the last screenshot/zoom; norm1000 = 0...1000 window-relative; norm1 = 0...1; screen = absolute points (app/foreground leases only)."]
     let regionProp: [String: Any] = ["type": "object", "description": "Normalized crop {x,y,width,height} in 0...1 relative to the window; defaults to the full window."]
     return [
-        ["name": "list_apps", "description": "List running apps, held leases, and coordinate-space defaults.", "inputSchema": obj([:], required: [])],
+        ["name": "list_apps", "description": "List running apps, held leases, foreground state, and coordinate-space defaults.", "inputSchema": obj([:], required: [])],
         ["name": "windows", "description": "List windows (optionally for one pid/app).", "inputSchema": obj(["pid": pidProp, "app": appProp, "all": ["type": "boolean"]], required: [])],
         ["name": "acquire", "description": "Acquire an app lease (default) or a window lease. Returns acquisitionId plus the coordinate space and window target. App and window leases for one pid are mutually exclusive; multiple window leases may coexist. Fails with LEASE_HELD if the target is held.", "inputSchema": obj(["pid": pidProp, "app": appProp, "scope": ["type": "string", "enum": ["app", "window"], "description": "app (default) or window"], "wid": widProp, "coordSpace": coordProp, "agentLabel": ["type": "string"]], required: [])],
-        ["name": "release", "description": "Release an app or window lease.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp], required: ["acquisitionId"])],
+        ["name": "release", "description": "Release an app/window/foreground lease. Releasing a foreground lease restores the user's pointer and focus.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp], required: ["acquisitionId"])],
         ["name": "screenshot", "description": "Capture a window (or the display when wid=0) as an inline PNG. Returns snapshotId, image dimensions, window bounds, crop region, scale, and coordinate space. Optional normalized region, grid, and cursor overlay.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "region": regionProp, "maxDimension": ["type": "number", "description": "Long-edge cap in pixels (default 1600; full-resolution source is cached for zoom)"], "grid": ["type": "number"], "cursor": ["type": "string", "description": "x,y in the lease coordinate space, or last"], "clean": ["type": "boolean"], "coordSpace": coordProp], required: ["acquisitionId"])],
         ["name": "zoom", "description": "Return a clear crop of the target window, around a preset region or a point. part = top-left|top-right|bottom-left|bottom-right|center|cursor (cursor uses the lease's last agent cursor); at/x,y centers a crop. Crops the cached full-resolution screenshot without upscaling.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "part": ["type": "string", "enum": ["top-left", "top-right", "bottom-left", "bottom-right", "center", "cursor"]], "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "size": ["type": "number", "description": "Crop fraction 0.1...1.0 (default 0.5, or 0.25 for cursor)"], "maxDimension": ["type": "number", "description": "Long-edge cap in pixels (default 768)"], "fresh": ["type": "boolean", "description": "Recapture instead of using the last snapshot"], "coordSpace": coordProp], required: ["acquisitionId"])],
         ["name": "move", "description": "Set the lease's virtual cursor position and return a screenshot with the crosshair. Does not post a mouse event; use hover for that.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "grid": ["type": "number"], "coordSpace": coordProp], required: ["acquisitionId"])],
-        ["name": "hover", "description": "Move the agent pointer to a point in the target window without clicking. Posts a real mouseMoved (background) so hover states and tooltips can appear, then returns a screenshot.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "grid": ["type": "number"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
-        ["name": "click", "description": "Click at a point in the target window. Background by default. Coordinates use the lease coordinate space unless coordSpace overrides.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "double": ["type": "boolean"], "right": ["type": "boolean"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
-        ["name": "type", "description": "Type unicode text (keycode 0 + unicode; games need key).", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "text": ["type": "string"], "bg": bgProp, "focus": focusProp], required: ["acquisitionId", "text"])],
-        ["name": "key", "description": "Virtual keycode (+modifiers, optional unicode char, hold ms).", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "code": ["type": "number"], "shift": ["type": "boolean"], "ctrl": ["type": "boolean"], "alt": ["type": "boolean"], "cmd": ["type": "boolean"], "fn": ["type": "boolean"], "char": ["type": "string"], "holdMs": ["type": "number"], "bg": bgProp, "focus": focusProp], required: ["acquisitionId", "code"])],
+        ["name": "hover", "description": "Move the agent pointer to a point in the target window without clicking. Posts a real mouseMoved (background) so hover states and tooltips can appear, then returns a screenshot. Foreground grants use the real HID path.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "grid": ["type": "number"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
+        ["name": "click", "description": "Click at a point in the target window. Background by default; foreground requires an approved request_foreground grant. Coordinates use the lease coordinate space unless coordSpace overrides.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "double": ["type": "boolean"], "right": ["type": "boolean"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
+        ["name": "type", "description": "Type unicode text (keycode 0 + unicode; games need key). Foreground requires an approved grant.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "text": ["type": "string"], "bg": bgProp, "focus": focusProp], required: ["acquisitionId", "text"])],
+        ["name": "key", "description": "Virtual keycode (+modifiers, optional unicode char, hold ms). Foreground requires an approved grant.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "code": ["type": "number"], "shift": ["type": "boolean"], "ctrl": ["type": "boolean"], "alt": ["type": "boolean"], "cmd": ["type": "boolean"], "fn": ["type": "boolean"], "char": ["type": "string"], "holdMs": ["type": "number"], "bg": bgProp, "focus": focusProp], required: ["acquisitionId", "code"])],
         ["name": "scroll", "description": "Pixel scroll at a point in the target window. Positive dy scrolls content up; dx/dy default to 0.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "dx": ["type": "number"], "dy": ["type": "number"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
-        ["name": "drag", "description": "Left-button drag from one point to another. Background by default; supports steps, stepMs, startHoldMs, endHoldMs.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "fromX": ["type": "number"], "fromY": ["type": "number"], "toX": ["type": "number"], "toY": ["type": "number"], "from": ["type": "string"], "to": ["type": "string"], "steps": ["type": "number"], "stepMs": ["type": "number"], "startHoldMs": ["type": "number"], "endHoldMs": ["type": "number"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
+        ["name": "drag", "description": "Left-button drag from one point to another. Background by default; supports steps, stepMs, startHoldMs, endHoldMs. Foreground requires an approved grant.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "fromX": ["type": "number"], "fromY": ["type": "number"], "toX": ["type": "number"], "toY": ["type": "number"], "from": ["type": "string"], "to": ["type": "string"], "steps": ["type": "number"], "stepMs": ["type": "number"], "startHoldMs": ["type": "number"], "endHoldMs": ["type": "number"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
         ["name": "ax", "description": "Accessibility tree dump for the lease target (positional index; same walk as press). Window leases walk only that window.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "depth": ["type": "number"], "maxNodes": ["type": "number"]], required: ["acquisitionId"])],
         ["name": "press", "description": "AXPress by positional index (guard with expectRole/expectTitle). Window leases act only inside that window.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "index": ["type": "number"], "depth": ["type": "number"], "maxNodes": ["type": "number"], "expectRole": ["type": "string"], "expectTitle": ["type": "string"]], required: ["acquisitionId", "index"])],
+        ["name": "request_foreground", "description": "Ask the user to approve temporary foreground control of one window. This blocks up to 90s for menubar approval, revokes every background lease on approval, and returns a foreground grant id. The user sees the target, agent, reason, and duration.", "inputSchema": obj(["pid": pidProp, "app": appProp, "wid": widProp, "reason": ["type": "string"], "durationMs": ["type": "number", "description": "10s...5min (default 30s)"], "coordSpace": coordProp, "agentLabel": ["type": "string"]], required: [])],
+        ["name": "foreground_status", "description": "Return idle/pending/active foreground state, target, agent, and remaining time.", "inputSchema": obj([:], required: [])],
+        ["name": "release_foreground", "description": "Release an active foreground grant and restore the user's pointer and focus.", "inputSchema": obj(["acquisitionId": idProp, "foregroundGrantId": ["type": "string"]], required: [])],
     ]
 }
 
@@ -81,6 +84,9 @@ func invalidIdResult(_ reason: String) -> [String: Any] {
 // MARK: – MCP HTTP server (Network framework, loopback only)
 final class MCPServer: NSObject {
     static let shared = MCPServer()
+    /// Injected into the menubar WKWebView only. It is deliberately not served
+    /// over HTTP, so an MCP client cannot approve its own foreground request.
+    let uiToken = UUID().uuidString
     // The listening socket and port are written on the main thread (start/stop, /api/port) and
     // read by the accept loop and the socket workers, so they are lock-backed. The generation
     // counter retires a superseded accept loop before it can accept on a recycled fd number.
@@ -118,9 +124,11 @@ final class MCPServer: NSObject {
     // InputGate, matching the single hardware pointer/focus.
     let controlQueue = DispatchQueue(label: "cua.control", qos: .userInitiated)
     let inputQueue = DispatchQueue(label: "cua.input", qos: .userInitiated)
+    let foregroundQueue = DispatchQueue(label: "cua.foreground", qos: .userInitiated)
     private let leaseQueueLock = NSLock()
     private var leaseQueues: [String: DispatchQueue] = [:]
-    private let controlTools: Set<String> = ["list_apps", "windows", "acquire", "release"]
+    private let controlTools: Set<String> = ["list_apps", "windows", "acquire", "release",
+                                             "foreground_status", "release_foreground"]
     private let inputTools: Set<String> = ["click", "type", "key", "scroll", "drag", "hover", "press"]
     let connGate = DispatchSemaphore(value: 8)
     var onStateChange: (() -> Void)?
@@ -142,7 +150,12 @@ final class MCPServer: NSObject {
 
     func runTool(name: String, args: [String: Any]) -> [String: Any] {
         var result: [String: Any] = [:]
-        if inputTools.contains(name) {
+        if name == "request_foreground" {
+            // This call deliberately waits for menubar approval. It runs on its
+            // own queue so background sessions can keep working until the user
+            // approves and the coordinator revokes them.
+            foregroundQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
+        } else if inputTools.contains(name) {
             InputGate.shared.withLock {
                 inputQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
             }
@@ -418,7 +431,8 @@ final class MCPServer: NSObject {
             let missing = [ax ? nil : "Accessibility", scr ? nil : "Screen Recording"].compactMap { $0 }.joined(separator: " + ")
             let perms = (ax && scr) ? "Permissions OK (Accessibility + Screen Recording)." : "Missing: \(missing). Grant as Cua.app via the button below."
             let payload: [String: Any] = ["port": Int(port), "url": "http://127.0.0.1:\(port)/mcp", "perms": perms,
-                                          "ax": ax, "scr": scr, "sessions": sessions]
+                                          "ax": ax, "scr": scr, "sessions": sessions,
+                                          "foreground": ForegroundCoordinator.shared.status()]
             send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: ["Cache-Control": "no-store"])
             return
         }
@@ -430,11 +444,38 @@ final class MCPServer: NSObject {
                 let p32 = Int32(clamping: pid)
                 let w32 = wid.flatMap { $0 > 0 && $0 <= Int(UInt32.max) ? UInt32($0) : nil }
                 controlQueue.sync {
+                    let foreground = SessionStore.shared.sessions().contains { $0.pid == p32 && $0.scope == .foreground }
                     SessionStore.shared.free(pid: p32, wid: w32)
+                    if foreground { ForegroundCoordinator.shared.stop() }
                 }
                 onStateChange?()
             }
             send(fd, status: "200 OK", body: "{\"ok\":true}".data(using: .utf8)!, extraHeaders: [:])
+            return
+        }
+        if pathOnly == "/api/foreground" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
+            guard req.headers["x-cua-ui-token"] == uiToken else {
+                send(fd, status: "403 Forbidden", body: Data("{\"error\":\"foreground approval must come from the Cua menubar\"}".utf8))
+                return
+            }
+            let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+            let action = (obj["action"] as? String ?? "").lowercased()
+            let requestId = (obj["requestId"] as? String) ?? ""
+            var ok = false
+            switch action {
+            case "approve":
+                ok = ForegroundCoordinator.shared.approve(requestId: requestId) == nil
+            case "deny":
+                ok = ForegroundCoordinator.shared.deny(requestId: requestId)
+            case "stop":
+                ForegroundCoordinator.shared.stop()
+                ok = true
+            default:
+                break
+            }
+            let payload: [String: Any] = ["ok": ok, "foreground": ForegroundCoordinator.shared.status()]
+            send(fd, status: ok ? "200 OK" : "409 Conflict", body: jsonData(payload), extraHeaders: [:])
             return
         }
         if pathOnly == "/api/port" && req.method == "POST" {
@@ -476,6 +517,7 @@ final class MCPServer: NSObject {
         if pathOnly == "/api/quit" && req.method == "POST" {
             guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
             send(fd, status: "200 OK", body: "{\"ok\":true}".data(using: .utf8)!, extraHeaders: [:])
+            ForegroundCoordinator.shared.stop()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApplication.shared.terminate(nil) }
             return
         }
@@ -538,7 +580,38 @@ final class MCPServer: NSObject {
                 "protocolVersion": "2025-06-18",
                 "serverInfo": ["name": "cua-mcp", "version": "1.1"],
                 "capabilities": ["tools": ["listChanged": false]],
-                "instructions": "Cua controls apps through leases. Workflow: list_apps -> acquire (scope app or window) -> windows/screenshot -> act -> release. Coordinates use the lease coordSpace (norm1000 by default): norm1000 is 0..1000 relative to the target window screenshot; image is pixels in the last screenshot/zoom; norm1 is 0..1; screen is absolute points for app leases only. Call screenshot before image-mode actions. Use zoom for small UI, hover to trigger hover states. Background actions never move the user's pointer or raise the target window.")\r\n"
+                "instructions": "Cua controls apps through leases. Workflow: list_apps -> acquire (scope app or window) -> windows/screenshot -> act -> release. Coordinates use the lease coordSpace (norm1000 by default): norm1000 is 0..1000 relative to the target window screenshot; image is pixels in the last screenshot/zoom; norm1 is 0..1; screen is absolute points for app leases only. Call screenshot before image-mode actions. Use zoom for small UI, hover to trigger hover states. bg=true is background and never moves the user's pointer; bg=false requires an approved request_foreground grant. Background and foreground leases are mutually exclusive. If LEASE_HELD or GLOBAL_FOREGROUND_ACTIVE, stop or ask the user; do not retry in a loop."
+            ]
+            var r = result
+            // Advertise only a protocol version this server actually speaks.
+            if let pv = params["protocolVersion"] as? String, ["2024-11-05", "2025-03-26", "2025-06-18"].contains(pv) {
+                r["protocolVersion"] = pv
+            }
+            return (r, sid)
+        case "notifications/initialized":
+            return ([:], incomingSession)
+        case "ping":
+            return ([:], incomingSession)
+        case "tools/list":
+            return (["tools": toolDefs()], incomingSession)
+        case "tools/call":
+            let name = params["name"] as? String ?? ""
+            let args = (params["arguments"] as? [String: Any]) ?? [:]
+            // Blocking, UI-facing work (captures, usleep-paced input) must not block the socket
+            // queue: the menubar UI polls /api/state while an agent call runs.
+            let result = runTool(name: name, args: args)
+            return (result, incomingSession)
+        case "resources/list":
+            return (["resources": []], incomingSession)
+        case "prompts/list":
+            return (["prompts": []], incomingSession)
+        default:
+            return (nil, incomingSession)
+        }
+    }
+    func send(_ fd: Int32, status: String, body: Data, extraHeaders: [String: String] = [:], close: Bool = true) {
+        var h = "HTTP/1.1 \(status)\r\n"
+        h += "Content-Type: \(extraHeaders["Content-Type"] ?? "application/json")\r\n"
         h += "Content-Length: \(body.count)\r\n"
         h += "Connection: close\r\n"
         h += "X-Content-Type-Options: nosniff\r\n"
@@ -563,3 +636,4 @@ final class MCPServer: NSObject {
         if close { Darwin.close(fd) }
     }
 }
+
