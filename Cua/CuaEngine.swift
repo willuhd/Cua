@@ -8,342 +8,531 @@ import WebKit
 import Darwin
 
 // MARK: – Cua engine (tool call bodies; all in-memory)
+struct ToolFailure: Error {
+    let result: [String: Any]
+}
+
 final class CuaEngine {
     static let shared = CuaEngine()
-    func resolvePid(params: [String: Any]) -> Int32? {
-        if let p = params["pid"] as? Int { return Int32(p) }
-        if let p = params["pid"] as? Double { return Int32(p) }
-        if let s = params["app"] as? String { return findPid(app: s) }
-        if let s = params["pid"] as? String, let n = Int32(s) { return n }
+
+
+    private func number(_ v: Any?) -> Double? {
+        if let n = v as? NSNumber { return n.doubleValue }
+        if let d = v as? Double, d.isFinite { return d }
+        if let i = v as? Int { return Double(i) }
         return nil
     }
-    enum LeaseCheckError: Error { case tool([String: Any]) }
-    func requireLease(params: [String: Any]) -> Result<(pid: Int32, session: Session), LeaseCheckError> {
-        guard let pid = resolvePid(params: params) else {
-            return .failure(.tool(toolResultText("{\"code\":\"NO_TARGET\",\"hint\":\"pass pid or app\"}", isError: true)))
+
+    private func pDouble(_ params: [String: Any], _ key: String) -> Double? {
+        guard let d = number(params[key]), d.isFinite else { return nil }
+        return d
+    }
+
+    private func pInt(_ params: [String: Any], _ key: String) -> Int? {
+        guard let d = pDouble(params, key) else { return nil }
+        return Int(exactly: d)
+    }
+
+    private func pUInt32(_ params: [String: Any], _ key: String) -> UInt32? {
+        guard let d = pDouble(params, key), d >= 0, d <= Double(UInt32.max) else { return nil }
+        return UInt32(d)
+    }
+
+    private func pUInt16(_ params: [String: Any], _ key: String) -> UInt16? {
+        guard let d = pDouble(params, key), d >= 0, d <= Double(UInt16.max) else { return nil }
+        return UInt16(d)
+    }
+
+    private func pInt32(_ params: [String: Any], _ key: String) -> Int32? {
+        guard let d = pDouble(params, key), d >= Double(Int32.min), d <= Double(Int32.max) else { return nil }
+        return Int32(d)
+    }
+
+    private func pString(_ params: [String: Any], _ key: String) -> String? {
+        (params[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func clampInt(_ v: Int?, _ lo: Int, _ hi: Int, _ fallback: Int) -> Int {
+        guard let v = v else { return fallback }
+        return max(lo, min(hi, v))
+    }
+
+    private func clampDouble(_ v: Double?, _ lo: Double, _ hi: Double, _ fallback: Double) -> Double {
+        guard let v = v, v.isFinite else { return fallback }
+        return max(lo, min(hi, v))
+    }
+
+    private func jsonText(_ obj: [String: Any]) -> String {
+        String(decoding: jsonData(obj), as: UTF8.self)
+    }
+
+    private func errorResult(_ code: String, _ message: String, hint: String? = nil,
+                             extra: [String: Any] = [:]) -> [String: Any] {
+        var p: [String: Any] = ["code": code, "message": message]
+        if let hint = hint { p["hint"] = hint }
+        for (k, v) in extra { p[k] = v }
+        return toolResultText(jsonText(p), isError: true, structured: p)
+    }
+
+    private func failure(_ code: String, _ message: String, hint: String? = nil,
+                         extra: [String: Any] = [:]) -> ToolFailure {
+        ToolFailure(result: errorResult(code, message, hint: hint, extra: extra))
+    }
+
+    private func globalActiveFailure() -> ToolFailure {
+        let status = ForegroundCoordinator.shared.status()
+        return failure("GLOBAL_FOREGROUND_ACTIVE",
+                       "Another agent is using the foreground pointer and focus.",
+                       hint: "End your turn or do work that does not use the desktop. Acquire a new lease after the foreground grant ends.",
+                       extra: ["retryable": true, "suggested": "end_turn_or_non_desktop_work", "foreground": status])
+    }
+
+    private func foregroundRequired() -> ToolFailure {
+        failure("FOREGROUND_REQUIRED",
+                "Global HID delivery is only available inside an approved foreground grant.",
+                hint: "Call request_foreground and ask the user to approve it, then retry.")
+    }
+
+    // MARK: – target resolution
+
+    func resolvePid(params: [String: Any]) -> Int32? {
+        if let n = pInt(params, "pid") {
+            guard n >= 0, n <= Int(Int32.max) else { return nil }
+            return Int32(n)
         }
-        guard let idStr = params["acquisitionId"] as? String, !idStr.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return .failure(.tool(invalidIdResult("missing acquisitionId — call acquire first")))
-        }
-        switch SessionStore.shared.validate(pid: pid, id: idStr.trimmingCharacters(in: .whitespaces)) {
-        case .success(let s): return .success((pid, s))
-        case .failure(.held(let s)): return .failure(.tool(leaseHeldResult(s)))
-        case .failure(.invalidId(let r)): return .failure(.tool(invalidIdResult(r)))
-        case .failure(.unknownApp(let m)): return .failure(.tool(toolResultText("{\"code\":\"UNKNOWN_APP\",\"message\":\"\(m)\"}", isError: true)))
+        if let s = pString(params, "app"), !s.isEmpty { return findPid(app: s) }
+        if let s = pString(params, "pid"), let n = Int32(s) { return n }
+        return nil
+    }
+
+    private func leaseErrorResult(_ e: SessionStore.LeaseError) -> [String: Any] {
+        switch e {
+        case .held(let s): return leaseHeldResult(s)
+        case .invalidId(let reason): return invalidIdResult(reason)
+        case .unknownApp(let m): return errorResult("UNKNOWN_APP", m)
+        case .badRequest(let m): return errorResult("BAD_ARGS", m)
         }
     }
+
+    func requireLease(params: [String: Any]) -> Result<Session, ToolFailure> {
+        guard let id = pString(params, "acquisitionId"), !id.isEmpty else {
+            return .failure(ToolFailure(result: invalidIdResult("missing acquisitionId — call acquire first")))
+        }
+        let pid = resolvePid(params: params)
+        if let active = ForegroundCoordinator.shared.activeSessionID,
+           id.lowercased() != active.lowercased() {
+            return .failure(globalActiveFailure())
+        }
+        switch SessionStore.shared.validate(id: id, pid: pid) {
+        case .success(let s):
+            if ForegroundCoordinator.shared.activeSessionID == nil && s.scope == .foreground {
+                return .failure(ToolFailure(result: invalidIdResult("foreground grant is no longer active")))
+            }
+            return .success(s)
+        case .failure(let e):
+            return .failure(ToolFailure(result: leaseErrorResult(e)))
+        }
+    }
+
+    struct Target {
+        let wid: UInt32
+        let bounds: CGRect
+        let isScreen: Bool
+    }
+
+    func resolveTarget(_ s: Session, _ params: [String: Any], allowScreen: Bool) -> Result<Target, ToolFailure> {
+        let requested = pUInt32(params, "wid")
+        if s.scope != .app {
+            guard let leased = s.wid else { return .failure(failure("NO_WINDOW", "lease has no window")) }
+            if let requested = requested, requested != leased {
+                return .failure(failure("WINDOW_NOT_LEASED", "this lease owns window \(leased), not \(requested)"))
+            }
+            guard let b = windowBounds(wid: leased) else {
+                return .failure(failure("WINDOW_GONE", "the leased window is no longer available"))
+            }
+            return .success(Target(wid: leased, bounds: b, isScreen: false))
+        }
+        let wid = requested ?? defaultWid(pid: s.pid) ?? 0
+        if wid == 0 {
+            if allowScreen {
+                let b = CGDisplayBounds(CGMainDisplayID())
+                guard b.width > 0, b.height > 0 else {
+                    return .failure(failure("NO_DISPLAY", "no active display"))
+                }
+                return .success(Target(wid: 0, bounds: b, isScreen: true))
+            }
+            return .failure(failure("NO_WINDOW", "no window to target; pass wid or open a window"))
+        }
+        guard windowOwnerPid(wid: wid) == s.pid else {
+            return .failure(failure("WINDOW_NOT_OWNED", "window \(wid) does not belong to pid \(s.pid)"))
+        }
+        guard let b = windowBounds(wid: wid) else {
+            return .failure(failure("WINDOW_GONE", "window \(wid) is no longer available"))
+        }
+        return .success(Target(wid: wid, bounds: b, isScreen: false))
+    }
+
+    private func coordSpace(_ s: Session, _ params: [String: Any], fallback: CoordSpace? = nil) -> CoordSpace? {
+        if let raw = pString(params, "coordSpace") {
+            guard let c = CoordSpace(rawValue: raw) else { return nil }
+            if c == .screen && s.scope == .window { return nil }
+            return c
+        }
+        return fallback ?? s.coordSpace
+    }
+
+    struct MappedPoint {
+        let screen: CGPoint
+        let normalized: CGPoint
+    }
+
+    private func mapPoint(_ s: Session, target: Target, x: Double, y: Double,
+                          space: CoordSpace) -> Result<MappedPoint, ToolFailure> {
+        guard x.isFinite, y.isFinite else { return .failure(failure("BAD_COORDS", "coordinates must be finite")) }
+        switch space {
+        case .screen:
+            guard s.scope == .app || s.scope == .foreground else {
+                return .failure(failure("SCREEN_COORDS_FORBIDDEN", "absolute screen coordinates are only allowed for app and foreground leases"))
+            }
+            let nx = target.bounds.width > 0 ? (x - target.bounds.minX) / target.bounds.width : 0
+            let ny = target.bounds.height > 0 ? (y - target.bounds.minY) / target.bounds.height : 0
+            return .success(MappedPoint(screen: CGPoint(x: x, y: y), normalized: CGPoint(x: nx, y: ny)))
+        case .norm1000:
+            guard x >= 0, x <= 1000, y >= 0, y <= 1000 else {
+                return .failure(failure("BAD_COORDS", "norm1000 coordinates must be in 0...1000",
+                                        hint: "Use coordSpace:'image' for pixels or coordSpace:'norm1' for 0...1."))
+            }
+            let nx = x / 1000.0, ny = y / 1000.0
+            return .success(MappedPoint(screen: CGPoint(x: target.bounds.minX + nx * target.bounds.width,
+                                                        y: target.bounds.minY + ny * target.bounds.height),
+                                        normalized: CGPoint(x: nx, y: ny)))
+        case .norm1:
+            guard x >= 0, x <= 1, y >= 0, y <= 1 else {
+                return .failure(failure("BAD_COORDS", "norm1 coordinates must be in 0...1"))
+            }
+            return .success(MappedPoint(screen: CGPoint(x: target.bounds.minX + x * target.bounds.width,
+                                                        y: target.bounds.minY + y * target.bounds.height),
+                                        normalized: CGPoint(x: x, y: y)))
+        case .image:
+            return .failure(failure("NO_SNAPSHOT", "image coordinates are not available yet"))
+        }
+    }
+
+    private func rawPoint(_ params: [String: Any]) -> (Double, Double)? {
+        if let x = pDouble(params, "x"), let y = pDouble(params, "y") { return (x, y) }
+        if let at = pString(params, "at") {
+            let p = at.split(separator: ",")
+            if p.count == 2, let x = Double(p[0].trimmingCharacters(in: .whitespaces)),
+               let y = Double(p[1].trimmingCharacters(in: .whitespaces)), x.isFinite, y.isFinite {
+                return (x, y)
+            }
+        }
+        return nil
+    }
+
+    private func screenPoint(_ s: Session, target: Target, params: [String: Any],
+                             space: CoordSpace) -> Result<MappedPoint, ToolFailure> {
+        guard let (x, y) = rawPoint(params) else {
+            return .failure(failure("BAD_ARGS", "pass x,y or at"))
+        }
+        return mapPoint(s, target: target, x: x, y: y, space: space)
+    }
+
+    private func normalizedFromScreen(_ p: CGPoint, bounds: CGRect) -> CGPoint {
+        guard bounds.width > 0, bounds.height > 0 else { return .zero }
+        return CGPoint(x: (p.x - bounds.minX) / bounds.width, y: (p.y - bounds.minY) / bounds.height)
+    }
+
+    // MARK: – snapshots
+
+    private func parseRegion(_ params: [String: Any]) -> Result<CGRect, ToolFailure> {
+        guard let raw = params["region"] else {
+            return .success(CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        var x = 0.0, y = 0.0, w = 1.0, h = 1.0
+        if let s = raw as? String {
+            let p = s.split(separator: ",")
+            guard p.count == 4,
+                  let vx = Double(p[0].trimmingCharacters(in: .whitespaces)),
+                  let vy = Double(p[1].trimmingCharacters(in: .whitespaces)),
+                  let vw = Double(p[2].trimmingCharacters(in: .whitespaces)),
+                  let vh = Double(p[3].trimmingCharacters(in: .whitespaces)) else {
+                return .failure(failure("BAD_REGION", "region must be x,y,w,h"))
+            }
+            x = vx; y = vy; w = vw; h = vh
+        } else if let d = raw as? [String: Any] {
+            guard let vx = number(d["x"]), let vy = number(d["y"]),
+                  let vw = number(d["width"]), let vh = number(d["height"]) else {
+                return .failure(failure("BAD_REGION", "region needs x, y, width, height"))
+            }
+            x = vx; y = vy; w = vw; h = vh
+        } else {
+            return .failure(failure("BAD_REGION", "region must be an object or string"))
+        }
+        guard x.isFinite, y.isFinite, w.isFinite, h.isFinite, w > 0, h > 0,
+              x >= 0, y >= 0, x + w <= 1.0001, y + h <= 1.0001 else {
+            return .failure(failure("BAD_REGION", "region must be normalized 0...1 and non-empty"))
+        }
+        return .success(CGRect(x: x, y: y, width: min(w, 1 - x), height: min(h, 1 - y)))
+    }
+
+    private func captureSnapshot(_ s: Session, target: Target, region: CGRect,
+                                 maxDimension: Int, grid: Int,
+                                 cursor: (Double, Double)?,
+                                 space: CoordSpace? = nil) -> Result<(Snapshot, Data), ToolFailure> {
+        let coord = space ?? s.coordSpace
+        let source: CGImage?
+        if target.wid == 0 { source = captureScreenImage() } else { source = captureWindowImage(wid: target.wid) }
+        guard let source = source else {
+            return .failure(failure("CAPTURE_FAILED",
+                                    "could not capture \(target.wid == 0 ? "the display" : "window \(target.wid)")",
+                                    hint: "Grant Screen Recording to Cua in Settings → Privacy & Security."))
+        }
+        guard let rendered = renderSnapshot(source: source, windowBounds: target.bounds, region: region,
+                                             maxDimension: maxDimension, grid: grid,
+                                             cursor: cursor, coordSpace: coord) else {
+            return .failure(failure("RENDER_FAILED", "could not render the screenshot"))
+        }
+        guard let data = pngData(from: rendered.image) else {
+            return .failure(failure("PNG_FAILED", "could not encode the screenshot"))
+        }
+        let snap = Snapshot(id: UUID().uuidString.prefix(8).lowercased(), sessionID: s.id, wid: target.wid,
+                            source: source, windowBounds: target.bounds, region: region,
+                            imageWidth: rendered.width, imageHeight: rendered.height,
+                            coordSpace: coord, capturedAt: Date())
+        SnapshotStore.shared.save(snap)
+        return .success((snap, data))
+    }
+
+    private func snapshotPayload(_ snap: Snapshot, data: Data, pid: Int32) -> [String: Any] {
+        let b = snap.windowBounds
+        let scale = b.width > 0 && snap.region.width > 0
+            ? Double(snap.imageWidth) / (Double(b.width) * Double(snap.region.width)) : 1
+        let backing = b.width > 0 ? Double(snap.source.width) / Double(b.width) : 1
+        return [
+            "snapshotId": snap.id, "wid": Int(snap.wid), "pid": Int(pid), "bytes": data.count,
+            "imageWidth": snap.imageWidth, "imageHeight": snap.imageHeight,
+            "coordSpace": snap.coordSpace.rawValue,
+            "scale": scale, "backingScale": backing,
+            "window": ["x": Double(b.minX), "y": Double(b.minY), "width": Double(b.width), "height": Double(b.height)],
+            "region": ["x": Double(snap.region.minX), "y": Double(snap.region.minY),
+                       "width": Double(snap.region.width), "height": Double(snap.region.height)],
+            "capturedAt": Int(snap.capturedAt.timeIntervalSince1970 * 1000)
+        ]
+    }
+
+    // MARK: – tool bodies
+
     func toolListApps() -> [String: Any] {
+        let sessions = SessionStore.shared.sessions()
         let apps = runningApps().map { a -> [String: Any] in
-            var d: [String: Any] = ["pid": intVal(a["pid"]), "name": a["name"] as! String, "bid": a["bid"] as! String]
-            if let h = SessionStore.shared.sessions().first(where: { $0.pid == Int32(intVal(a["pid"])) }) {
-                d["held"] = true; d["acquisitionId"] = h.id; d["agent"] = h.agentLabel ?? "unknown"
+            let pid = Int32(intVal(a["pid"]))
+            var d: [String: Any] = ["pid": Int(pid), "name": a["name"] as! String, "bid": a["bid"] as! String]
+            if let h = sessions.first(where: { $0.pid == pid }) {
+                d["held"] = true
+                d["scope"] = h.scope.rawValue
+                d["acquisitionId"] = h.id
+                d["agent"] = h.agentLabel ?? "unknown"
+                if let wid = h.wid { d["wid"] = Int(wid) }
             } else { d["held"] = false }
             return d
         }
-        let sessions = SessionStore.shared.sessions().map { s -> [String: Any] in
-            ["pid": s.pid, "app": s.appName, "bid": s.bid, "agent": s.agentLabel ?? "unknown", "acquisitionId": s.id]
+        let sessionPayload = sessions.map { s -> [String: Any] in
+            var d: [String: Any] = ["pid": Int(s.pid), "app": s.appName, "bid": s.bid,
+                                     "scope": s.scope.rawValue, "agent": s.agentLabel ?? "unknown",
+                                     "acquisitionId": s.id, "id": s.id,
+                                     "coordSpace": s.coordSpace.rawValue]
+            if let wid = s.wid {
+                d["wid"] = Int(wid)
+                if let title = windowTitle(wid: wid) { d["windowTitle"] = title }
+            }
+            return d
         }
-        let payload: [String: Any] = ["apps": apps, "sessions": sessions]
-        let text = (try? JSONSerialization.data(withJSONObject: payload))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        return toolResultText(text, structured: payload)
+        let payload: [String: Any] = ["apps": apps, "sessions": sessionPayload, "foreground": ForegroundCoordinator.shared.status()]
+        return toolResultText(jsonText(payload), structured: payload)
     }
+
     func toolWindows(params: [String: Any]) -> [String: Any] {
         let pid = resolvePid(params: params)
         let list = windowList(pid: pid, onscreenOnly: !(params["all"] as? Bool ?? false))
         let slim = list.map { w -> [String: Any] in
-            ["wid": intVal(w["wid"]), "pid": intVal(w["pid"]), "owner": w["owner"] as! String,
-             "layer": intVal(w["layer"]), "bounds": w["bounds"] as! [String: Any]]
+            var d: [String: Any] = ["wid": intVal(w["wid"]), "pid": intVal(w["pid"]),
+                                     "owner": w["owner"] as! String, "layer": intVal(w["layer"]),
+                                     "bounds": w["bounds"] as! [String: Any]]
+            if let wid = w["wid"] as? Int, let title = windowTitle(wid: UInt32(wid)) { d["title"] = title }
+            return d
         }
         let payload: [String: Any] = ["windows": slim]
-        let text = (try? JSONSerialization.data(withJSONObject: payload))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        return toolResultText(text, structured: payload)
+        return toolResultText(jsonText(payload), structured: payload)
     }
+
     func toolAcquire(params: [String: Any]) -> [String: Any] {
         guard let pid = resolvePid(params: params) else {
-            return toolResultText("{\"code\":\"NO_TARGET\",\"hint\":\"pass pid or app\"}", isError: true)
+            return errorResult("NO_TARGET", "pass pid or app")
         }
-        // Verify app exists
-        if appNameForPid(pid) == "?" {
-            if defaultWid(pid: pid) == nil {
-                return toolResultText("{\"code\":\"NO_SUCH_PID\",\"hint\":\"no running app with that pid\"}", isError: true)
+        if ForegroundCoordinator.shared.isActive {
+            return globalActiveFailure().result
+        }
+        if appNameForPid(pid) == "?" && defaultWid(pid: pid) == nil {
+            return errorResult("NO_SUCH_PID", "no running app with that pid")
+        }
+        let scopeRaw = pString(params, "scope") ?? "app"
+        guard let scope = LeaseScope(rawValue: scopeRaw), scope != .foreground else {
+            return errorResult("BAD_ARGS", "scope must be app or window")
+        }
+        let spaceRaw = pString(params, "coordSpace") ?? CoordSpace.norm1000.rawValue
+        guard let space = CoordSpace(rawValue: spaceRaw) else {
+            return errorResult("BAD_ARGS", "coordSpace must be image, norm1000, norm1, or screen")
+        }
+        if scope == .window && space == .screen {
+            return errorResult("BAD_ARGS", "window leases cannot use screen coordinates")
+        }
+        var wid: UInt32?
+        if scope == .window {
+            guard let requested = pUInt32(params, "wid"), requested != 0 else {
+                return errorResult("BAD_ARGS", "window scope needs wid")
             }
+            guard windowOwnerPid(wid: requested) == pid else {
+                return errorResult("WINDOW_NOT_OWNED", "window \(requested) does not belong to pid \(pid)")
+            }
+            wid = requested
         }
-        let label = (params["agentLabel"] as? String) ?? (params["agent"] as? String)
-        switch SessionStore.shared.acquire(pid: pid, agentLabel: label) {
+        let label = pString(params, "agentLabel") ?? pString(params, "agent")
+        switch SessionStore.shared.acquire(pid: pid, scope: scope, wid: wid, coordSpace: space, agentLabel: label) {
         case .success(let s):
-            let payload: [String: Any] = ["acquisitionId": s.id, "pid": s.pid, "app": s.appName]
-            let text = (try? JSONSerialization.data(withJSONObject: payload))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{}"
-            return toolResultText(text, structured: payload)
-        case .failure(.held(let s)):
-            return leaseHeldResult(s)
+            var payload: [String: Any] = ["acquisitionId": s.id, "pid": Int(s.pid), "app": s.appName,
+                                           "scope": s.scope.rawValue, "coordSpace": s.coordSpace.rawValue]
+            if let wid = s.wid {
+                payload["wid"] = Int(wid)
+                if let title = windowTitle(wid: wid) { payload["windowTitle"] = title }
+            }
+            return toolResultText(jsonText(payload), structured: payload)
         case .failure(let e):
-            return toolResultText("{\"code\":\"ACQUIRE_FAILED\",\"message\":\"\(e)\"}", isError: true)
+            return leaseErrorResult(e)
         }
     }
+
     func toolRelease(params: [String: Any]) -> [String: Any] {
-        guard let pid = resolvePid(params: params),
-              let idStr = params["acquisitionId"] as? String, !idStr.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return invalidIdResult("missing pid or acquisitionId")
+        guard let id = pString(params, "acquisitionId"), !id.isEmpty else {
+            return invalidIdResult("missing acquisitionId")
         }
-        switch SessionStore.shared.release(pid: pid, id: idStr.trimmingCharacters(in: .whitespaces)) {
-        case .success:
-            return toolResultText("{\"ok\":true}")
-        case .failure(.invalidId(let r)):
-            return invalidIdResult(r)
-        case .failure(.held(let s)):
-            return leaseHeldResult(s)
-        case .failure(let e):
-            return toolResultText("{\"code\":\"RELEASE_FAILED\",\"message\":\"\(e)\"}", isError: true)
+        let pid = resolvePid(params: params)
+        guard let session = SessionStore.shared.find(id: id) else {
+            return invalidIdResult("no active lease with this acquisitionId")
         }
+        if let pid = pid, session.pid != pid {
+            return invalidIdResult("lease belongs to pid \(session.pid), not \(pid)")
+        }
+        if session.scope == .foreground {
+            _ = ForegroundCoordinator.shared.release(sessionID: session.id)
+        } else {
+            _ = SessionStore.shared.release(id: session.id)
+        }
+        SnapshotStore.shared.remove(sessionID: session.id)
+        AXIndexStore.shared.remove(sessionID: session.id)
+        return toolResultText("{\"ok\":true}")
     }
+
     func toolScreenshot(params: [String: Any]) -> [String: Any] {
-        guard case .success(let t) = requireLease(params: params) else {
-            if case .failure(.tool(let r)) = requireLease(params: params) { return r }
-            return invalidIdResult("invalid id")
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
         }
-        let widRaw = (params["wid"] as? Int).map { UInt32($0) } ?? ((params["wid"] as? Double).map { UInt32($0) })
-        var wid = widRaw
-        if wid == nil { wid = defaultWid(pid: t.pid) }
-        let grid = (params["grid"] as? Int) ?? ((params["grid"] as? Double).map { Int($0) }) ?? 0
+        let space: CoordSpace
+        switch coordSpace(s, params) {
+        case .some(let v): space = v
+        case .none: return errorResult("BAD_ARGS", "invalid coordSpace")
+        }
+        let target: Target
+        switch resolveTarget(s, params, allowScreen: true) {
+        case .success(let value): target = value
+        case .failure(let f): return f.result
+        }
+        let region: CGRect
+        switch parseRegion(params) {
+        case .success(let r): region = r
+        case .failure(let f): return f.result
+        }
         let clean = params["clean"] as? Bool ?? false
-        var cur: (Double, Double)? = nil
-        if let s = params["cursor"] as? String {
-            if s == "last" || s == "show" { cur = SessionStore.shared.lastCursor() }
-            else {
-                let p = s.split(separator: ",")
-                if p.count == 2, let x = Double(p[0]), let y = Double(p[1]) { cur = (x, y) }
+        let grid = clean ? 0 : clampInt(pInt(params, "grid"), 0, 1000, 0)
+        let maxDim = clampInt(pInt(params, "maxDimension"), 64, 8000, 1600)
+        var cursor: CGPoint? = nil
+        if !clean {
+            if let raw = pString(params, "cursor") {
+                if raw == "last" || raw == "show" {
+                    if let c = SessionStore.shared.lastCursor(sessionID: s.id, wid: target.wid) {
+                        cursor = CGPoint(x: c.0, y: c.1)
+                    }
+                } else {
+                    let pair = raw.split(separator: ",")
+                    if pair.count == 2, let x = Double(pair[0].trimmingCharacters(in: .whitespaces)),
+                       let y = Double(pair[1].trimmingCharacters(in: .whitespaces)),
+                       let mapped = try? mapPoint(s, target: target, x: x, y: y, space: space).get() {
+                        cursor = mapped.screen
+                    }
+                }
             }
         }
-        if clean { cur = nil }
-        guard let data = captureScreenshotData(wid: wid, grid: clean ? 0 : grid, cursor: cur) else {
-            return toolResultText("{\"code\":\"CAPTURE_FAILED\",\"hint\":\"grant Screen Recording to Cua in Settings → Privacy & Security\"}", isError: true)
+        let cursorTuple = cursor.map { (Double($0.x), Double($0.y)) }
+        let captured: Result<(Snapshot, Data), ToolFailure> = captureSnapshot(s, target: target, region: region,
+                                                                              maxDimension: maxDim, grid: grid,
+                                                                              cursor: cursorTuple, space: space)
+        let snap: Snapshot, data: Data
+        switch captured {
+        case .success(let value): snap = value.0; data = value.1
+        case .failure(let f): return f.result
         }
-        let w = wid ?? 0
-        let caption = "screenshot wid=\(w) bytes=\(data.count)"
-        let structured: [String: Any] = ["wid": Int(w), "pid": t.pid, "bytes": data.count]
-        return toolResultImage(png: data, caption: caption, structured: structured)
+        let payload = snapshotPayload(snap, data: data, pid: s.pid)
+        let caption = "screenshot wid=\(target.wid) image=\(snap.imageWidth)x\(snap.imageHeight) space=\(space.rawValue) bytes=\(data.count)"
+        return toolResultImage(png: data, caption: caption, structured: payload)
     }
+
     func toolMove(params: [String: Any]) -> [String: Any] {
-        guard case .success(let t) = requireLease(params: params) else { return invalidIdResult("invalid id") }
-        var wid = ((params["wid"] as? Int).map { UInt32($0) }) ?? (defaultWid(pid: t.pid)) ?? 0
-        if wid == 0 { wid = defaultWid(pid: t.pid) ?? 0 }
-        var dst: (Double, Double)? = nil
-        if let x = params["toX"] as? Double, let y = params["toY"] as? Double { dst = (x, y) }
-        else if let x = params["toX"] as? Int, let y = params["toY"] as? Int { dst = (Double(x), Double(y)) }
-        else if let s = params["to"] as? String {
-            let p = s.split(separator: ","); if p.count == 2, let x = Double(p[0]), let y = Double(p[1]) { dst = (x, y) }
-        } else if let dx = params["byX"] as? Double, let dy = params["byY"] as? Double {
-            if let last = SessionStore.shared.lastCursor() { dst = (last.0 + dx, last.1 + dy) }
-            else if let b = windowBounds(wid: wid) { dst = (Double(b.midX) + dx, Double(b.midY) + dy) }
+        let s: Session
+        switch requireLease(params: params) {
+        case .success(let value): s = value
+        case .failure(let f): return f.result
         }
-        guard let to = dst else { return toolResultText("{\"code\":\"BAD_ARGS\",\"hint\":\"pass toX/toY or byX/byY\"}", isError: true) }
-        SessionStore.shared.saveCursor(pid: t.pid, wid: wid, x: to.0, y: to.1)
-        let grid = (params["grid"] as? Int) ?? 100
-        if let data = captureScreenshotData(wid: wid == 0 ? nil : wid, grid: grid, cursor: to) {
-            let caption = "cursor=\(Int(to.0)),\(Int(to.1)) wid=\(wid)"
-            return toolResultImage(png: data, caption: caption, structured: ["cursor": [Int(to.0), Int(to.1)], "wid": Int(wid)])
+        let space: CoordSpace
+        switch coordSpace(s, params) {
+        case .some(let v): space = v
+        case .none: return errorResult("BAD_ARGS", "invalid coordSpace")
+        }
+        let target: Target
+        switch resolveTarget(s, params, allowScreen: true) {
+        case .success(let value): target = value
+        case .failure(let f): return f.result
+        }
+        let mapped: MappedPoint
+        if let (x, y) = rawPoint(params) {
+            switch mapPoint(s, target: target, x: x, y: y, space: space) {
+            case .success(let p): mapped = p
+            case .failure(let f): return f.result
+            }
+        } else if let c = SessionStore.shared.lastCursor(sessionID: s.id, wid: target.wid) {
+            mapped = MappedPoint(screen: CGPoint(x: c.0, y: c.1), normalized: normalizedFromScreen(CGPoint(x: c.0, y: c.1), bounds: target.bounds))
         } else {
-            let payload: [String: Any] = ["ok": true, "cursor": [Int(to.0), Int(to.1)], "shot_error": "capture failed"]
-            let text = (try? JSONSerialization.data(withJSONObject: payload))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{}"
-            return toolResultText(text, structured: payload)
+            return errorResult("BAD_ARGS", "pass x,y or at")
         }
+        SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(mapped.screen.x), y: Double(mapped.screen.y))
+        let grid = clampInt(pInt(params, "grid"), 0, 1000, 0)
+        let captured = captureSnapshot(s, target: target, region: CGRect(x: 0, y: 0, width: 1, height: 1),
+                                       maxDimension: 1600, grid: grid,
+                                       cursor: (Double(mapped.screen.x), Double(mapped.screen.y)),
+                                       space: space)
+        let snap: Snapshot, data: Data
+        switch captured {
+        case .success(let value): snap = value.0; data = value.1
+        case .failure(let f): return f.result
+        }
+        var payload = snapshotPayload(snap, data: data, pid: s.pid)
+        payload["cursor"] = [Int(mapped.screen.x), Int(mapped.screen.y)]
+        payload["coordSpace"] = space.rawValue
+        return toolResultImage(png: data, caption: "cursor=\(Int(mapped.screen.x)),\(Int(mapped.screen.y)) wid=\(target.wid)",
+                               structured: payload)
     }
-    func toolClick(params: [String: Any]) -> [String: Any] {
-        guard case .success(let t) = requireLease(params: params) else { return invalidIdResult("invalid id") }
-        var x: Double? = params["x"] as? Double ?? (params["x"] as? Int).map { Double($0) }
-        var y: Double? = params["y"] as? Double ?? (params["y"] as? Int).map { Double($0) }
-        if x == nil, let s = params["at"] as? String { let p = s.split(separator: ","); if p.count == 2 { x = Double(p[0]); y = Double(p[1]) } }
-        guard let cx = x, let cy = y else { return toolResultText("{\"code\":\"BAD_ARGS\",\"hint\":\"pass x,y or at\"}", isError: true) }
-        var wid = ((params["wid"] as? Int).map { UInt32($0) }) ?? (defaultWid(pid: t.pid)) ?? 0
-        if wid == 0, let w = defaultWid(pid: t.pid) { wid = w }
-        let bg = params["bg"] as? Bool ?? true
-        let focus = params["focus"] as? Bool ?? false
-        let dbl = params["double"] as? Bool ?? false
-        let right = params["right"] as? Bool ?? false
-        var local = CGPoint(x: cx, y: cy)
-        if let b = windowBounds(wid: wid) { local = CGPoint(x: cx - b.origin.x, y: cy - b.origin.y) }
-        let group = Int64(Date().timeIntervalSince1970 * 1000) % 100000
-        var fo = FocusOutcome()
-        if bg {
-            fo = driveWithFocus(focus, pid: t.pid, wid: wid) {
-                let (downType, upType, button): (CGEventType, CGEventType, CGMouseButton) =
-                    right ? (.rightMouseDown, .rightMouseUp, .right) : (.leftMouseDown, .leftMouseUp, .left)
-                let downs = dbl ? 2 : 1
-                for i in 0..<downs {
-                    guard let down = CGEvent(mouseEventSource: nil, mouseType: downType, mouseCursorPosition: CGPoint(x: cx, y: cy), mouseButton: button),
-                          let up = CGEvent(mouseEventSource: nil, mouseType: upType, mouseCursorPosition: CGPoint(x: cx, y: cy), mouseButton: button) else { continue }
-                    routeMouse(down, wid: wid, pid: t.pid, local: local, clickState: Int64(i+1), group: group)
-                    routeMouse(up, wid: wid, pid: t.pid, local: local, clickState: Int64(i+1), group: group)
-                    postToPid(down, pid: t.pid); usleep(30_000); postToPid(up, pid: t.pid)
-                    if dbl && i == 0 { usleep(80_000) }
-                }
-            }
-        } else {
-            let (downType, upType, button): (CGEventType, CGEventType, CGMouseButton) =
-                right ? (.rightMouseDown, .rightMouseUp, .right) : (.leftMouseDown, .leftMouseUp, .left)
-            guard let down = CGEvent(mouseEventSource: nil, mouseType: downType, mouseCursorPosition: CGPoint(x: cx, y: cy), mouseButton: button),
-                  let up = CGEvent(mouseEventSource: nil, mouseType: upType, mouseCursorPosition: CGPoint(x: cx, y: cy), mouseButton: button) else {
-                return toolResultText("{\"code\":\"EVENT_FAILED\"}", isError: true)
-            }
-            down.post(tap: .cghidEventTap); usleep(30_000); up.post(tap: .cghidEventTap)
-            if dbl { usleep(80_000); down.post(tap: .cghidEventTap); usleep(30_000); up.post(tap: .cghidEventTap) }
-        }
-        SessionStore.shared.saveCursor(pid: t.pid, wid: wid, x: cx, y: cy)
-        var o: [String: Any] = ["ok": true, "bg": bg, "at": [Int(cx), Int(cy)], "wid": Int(wid), "pid": t.pid]
-        o.merge(fo.jsonFields) { _, b in b }
-        let text = (try? JSONSerialization.data(withJSONObject: o))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        return toolResultText(text, structured: o)
-    }
-    func toolType(params: [String: Any]) -> [String: Any] {
-        guard case .success(let t) = requireLease(params: params) else { return invalidIdResult("invalid id") }
-        guard let text = params["text"] as? String else { return toolResultText("{\"code\":\"BAD_ARGS\",\"hint\":\"pass text\"}", isError: true) }
-        let bg = params["bg"] as? Bool ?? true
-        let focus = params["focus"] as? Bool ?? false
-        var wid = ((params["wid"] as? Int).map { UInt32($0) }) ?? (defaultWid(pid: t.pid)) ?? 0
-        if wid == 0, let w = defaultWid(pid: t.pid) { wid = w }
-        let fo = driveWithFocus(focus, pid: t.pid, wid: wid) { typeText(text, pid: t.pid, bg: bg) }
-        var o: [String: Any] = ["ok": true, "typed": text.count, "bg": bg]
-        o.merge(fo.jsonFields) { _, b in b }
-        let t2 = (try? JSONSerialization.data(withJSONObject: o))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        return toolResultText(t2, structured: o)
-    }
-    func toolKey(params: [String: Any]) -> [String: Any] {
-        guard case .success(let t) = requireLease(params: params) else { return invalidIdResult("invalid id") }
-        var code: UInt16? = nil
-        if let c = params["code"] as? Int { code = UInt16(c) }
-        else if let c = params["code"] as? Double { code = UInt16(c) }
-        guard let cd = code else { return toolResultText("{\"code\":\"BAD_ARGS\",\"hint\":\"pass code\"}", isError: true) }
-        let bg = params["bg"] as? Bool ?? true
-        let focus = params["focus"] as? Bool ?? false
-        let holdMs = (params["holdMs"] as? Int) ?? ((params["holdMs"] as? Double).map { Int($0) }) ?? (bg ? 300 : 50)
-        var flags: CGEventFlags = []
-        if params["shift"] as? Bool ?? false { flags.insert(.maskShift) }
-        if params["ctrl"] as? Bool ?? false { flags.insert(.maskControl) }
-        if params["alt"] as? Bool ?? false { flags.insert(.maskAlternate) }
-        if params["cmd"] as? Bool ?? false { flags.insert(.maskCommand) }
-        if params["fn"] as? Bool ?? false { flags.insert(.maskSecondaryFn) }
-        let chr = params["char"] as? String
-        var wid = ((params["wid"] as? Int).map { UInt32($0) }) ?? (defaultWid(pid: t.pid)) ?? 0
-        if wid == 0, let w = defaultWid(pid: t.pid) { wid = w }
-        let fo = driveWithFocus(focus, pid: t.pid, wid: wid) { postKey(cd, pid: t.pid, bg: bg, holdMs: holdMs, flags: flags, char: chr) }
-        var o: [String: Any] = ["ok": true, "hold_ms": holdMs, "bg": bg, "code": Int(cd)]
-        if !flags.isEmpty {
-            var m: [String] = []
-            if flags.contains(.maskShift) { m.append("shift") }
-            if flags.contains(.maskControl) { m.append("ctrl") }
-            if flags.contains(.maskAlternate) { m.append("alt") }
-            if flags.contains(.maskCommand) { m.append("cmd") }
-            if flags.contains(.maskSecondaryFn) { m.append("fn") }
-            o["modifiers"] = m
-        }
-        if let chr = chr { o["char"] = chr }
-        o.merge(fo.jsonFields) { _, b in b }
-        let t2 = (try? JSONSerialization.data(withJSONObject: o))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        return toolResultText(t2, structured: o)
-    }
-    func toolScroll(params: [String: Any]) -> [String: Any] {
-        guard case .success(let t) = requireLease(params: params) else { return invalidIdResult("invalid id") }
-        var x: Double? = params["x"] as? Double ?? (params["x"] as? Int).map { Double($0) }
-        var y: Double? = params["y"] as? Double ?? (params["y"] as? Int).map { Double($0) }
-        if x == nil, let s = params["at"] as? String { let p = s.split(separator: ","); if p.count == 2 { x = Double(p[0]); y = Double(p[1]) } }
-        guard let cx = x, let cy = y else { return toolResultText("{\"code\":\"BAD_ARGS\",\"hint\":\"pass x,y or at\"}", isError: true) }
-        let dx = Int32((params["dx"] as? Int) ?? ((params["dx"] as? Double).map { Int($0) }) ?? 0)
-        let dy = Int32((params["dy"] as? Int) ?? ((params["dy"] as? Double).map { Int($0) }) ?? 0)
-        let bg = params["bg"] as? Bool ?? true
-        let focus = params["focus"] as? Bool ?? false
-        var wid = ((params["wid"] as? Int).map { UInt32($0) }) ?? (defaultWid(pid: t.pid)) ?? 0
-        if wid == 0, let w = defaultWid(pid: t.pid) { wid = w }
-        var local = CGPoint(x: cx, y: cy)
-        if let b = windowBounds(wid: wid) { local = CGPoint(x: cx - b.origin.x, y: cy - b.origin.y) }
-        let fo = driveWithFocus(focus, pid: t.pid, wid: wid) {
-            guard let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0) else { return }
-            e.location = CGPoint(x: cx, y: cy)
-            if wid != 0 { routeMouse(e, wid: wid, pid: t.pid, local: local, clickState: 0, group: 0) }
-            if bg { postToPid(e, pid: t.pid) } else { e.post(tap: .cghidEventTap) }
-        }
-        var o: [String: Any] = ["ok": true, "bg": bg]
-        o.merge(fo.jsonFields) { _, b in b }
-        let t2 = (try? JSONSerialization.data(withJSONObject: o))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        return toolResultText(t2, structured: o)
-    }
-    func toolDrag(params: [String: Any]) -> [String: Any] {
-        guard case .success(let t) = requireLease(params: params) else { return invalidIdResult("invalid id") }
-        func pt(_ prefix: String) -> (Double, Double)? {
-            if let x = params[prefix + "X"] as? Double, let y = params[prefix + "Y"] as? Double { return (x, y) }
-            if let x = params[prefix + "X"] as? Int, let y = params[prefix + "Y"] as? Int { return (Double(x), Double(y)) }
-            return nil
-        }
-        var f = pt("from"), tt = pt("to")
-        if f == nil, let s = params["from"] as? String { let p = s.split(separator: ","); if p.count == 2, let x = Double(p[0]), let y = Double(p[1]) { f = (x, y) } }
-        if tt == nil, let s = params["to"] as? String { let p = s.split(separator: ","); if p.count == 2, let x = Double(p[0]), let y = Double(p[1]) { tt = (x, y) } }
-        guard let ff = f, let ttt = tt else { return toolResultText("{\"code\":\"BAD_ARGS\",\"hint\":\"pass fromX/fromY + toX/toY\"}", isError: true) }
-        let bg = params["bg"] as? Bool ?? true
-        let focus = params["focus"] as? Bool ?? false
-        var wid = ((params["wid"] as? Int).map { UInt32($0) }) ?? (defaultWid(pid: t.pid)) ?? 0
-        if wid == 0, let w = defaultWid(pid: t.pid) { wid = w }
-        func mk(_ type: CGEventType, _ p: (Double, Double)) -> CGEvent? {
-            guard let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: CGPoint(x: p.0, y: p.1), mouseButton: .left) else { return nil }
-            var local = CGPoint(x: p.0, y: p.1)
-            if let b = windowBounds(wid: wid) { local = CGPoint(x: p.0 - b.origin.x, y: p.1 - b.origin.y) }
-            routeMouse(e, wid: wid, pid: t.pid, local: local, clickState: 1, group: 999)
-            return e
-        }
-        let fo = driveWithFocus(focus, pid: t.pid, wid: wid) {
-            let steps = 12
-            if bg {
-                if let d = mk(.leftMouseDown, ff) { postToPid(d, pid: t.pid) }
-                for i in 1...steps {
-                    let p = (ff.0 + (ttt.0 - ff.0) * Double(i) / Double(steps), ff.1 + (ttt.1 - ff.1) * Double(i) / Double(steps))
-                    if let e = mk(.leftMouseDragged, p) { postToPid(e, pid: t.pid) }
-                    usleep(15_000)
-                }
-                if let u = mk(.leftMouseUp, ttt) { postToPid(u, pid: t.pid) }
-            } else {
-                if let d = mk(.leftMouseDown, ff) { d.post(tap: .cghidEventTap) }
-                for i in 1...steps {
-                    let p = (ff.0 + (ttt.0 - ff.0) * Double(i) / Double(steps), ff.1 + (ttt.1 - ff.1) * Double(i) / Double(steps))
-                    if let e = mk(.leftMouseDragged, p) { e.post(tap: .cghidEventTap) }
-                    usleep(15_000)
-                }
-                if let u = mk(.leftMouseUp, ttt) { u.post(tap: .cghidEventTap) }
-            }
-        }
-        var o: [String: Any] = ["ok": true, "bg": bg]
-        o.merge(fo.jsonFields) { _, b in b }
-        let t2 = (try? JSONSerialization.data(withJSONObject: o))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        return toolResultText(t2, structured: o)
-    }
-    func toolAx(params: [String: Any]) -> [String: Any] {
-        guard case .success(let t) = requireLease(params: params) else { return invalidIdResult("invalid id") }
-        let depth = (params["depth"] as? Int) ?? ((params["depth"] as? Double).map { Int($0) }) ?? 8
-        let limit = (params["maxNodes"] as? Int) ?? ((params["maxNodes"] as? Double).map { Int($0) }) ?? 4000
-        let text = axDump(pid: t.pid, maxDepth: depth, limit: limit)
-        return toolResultText(text)
-    }
-    func toolPress(params: [String: Any]) -> [String: Any] {
-        guard case .success(let t) = requireLease(params: params) else { return invalidIdResult("invalid id") }
-        guard let idx = (params["index"] as? Int) ?? ((params["index"] as? Double).map { Int($0) }) else {
-            return toolResultText("{\"code\":\"BAD_ARGS\",\"hint\":\"pass index\"}", isError: true)
-        }
-        let depth = (params["depth"] as? Int) ?? 8
-        let limit = (params["maxNodes"] as? Int) ?? 4000
-        buildAXIndex(pid: t.pid, maxDepth: depth, limit: limit)
-        guard idx >= 0, idx < axIndex.count else {
-            return toolResultText("{\"code\":\"BAD_INDEX\",\"size\":\(axIndex.count)}", isError: true)
-        }
-        let n = axIndex[idx]
-        if let wantRole = params["expectRole"] as? String, wantRole != n.role {
-            return toolResultText("{\"code\":\"GUARD_ROLE\",\"message\":\"index \(idx) is \(n.role), expected \(wantRole)\"}", isError: true)
-        }
-        if let wantTitle = params["expectTitle"] as? String, !n.title.localizedCaseInsensitiveContains(wantTitle) {
-            return toolResultText("{\"code\":\"GUARD_TITLE\",\"message\":\"title mismatch\"}", isError: true)
-        }
-        let r = AXUIElementPerformAction(n.ref, "AXPress" as CFString)
-        let payload: [String: Any] = ["ok": r == .success, "index": idx, "role": n.role,
-                                     "title": String(n.title.prefix(60)), "ax_error": r.rawValue]
-        let text = (try? JSONSerialization.data(withJSONObject: payload))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        return toolResultText(text, isError: r != .success, structured: payload)
-    }
+
     func dispatch(tool: String, params: [String: Any]) -> [String: Any] {
         switch tool {
         case "list_apps": return toolListApps()
@@ -352,15 +541,7 @@ final class CuaEngine {
         case "release": return toolRelease(params: params)
         case "screenshot": return toolScreenshot(params: params)
         case "move": return toolMove(params: params)
-        case "click": return toolClick(params: params)
-        case "type": return toolType(params: params)
-        case "key": return toolKey(params: params)
-        case "scroll": return toolScroll(params: params)
-        case "drag": return toolDrag(params: params)
-        case "ax": return toolAx(params: params)
-        case "press": return toolPress(params: params)
-        default: return toolResultText("{\"code\":\"NO_SUCH_TOOL\",\"tool\":\"\(tool)\"}", isError: true)
+        default: return errorResult("NO_SUCH_TOOL", "tool \(tool) does not exist")
         }
     }
 }
-

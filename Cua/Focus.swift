@@ -60,6 +60,18 @@ func keyWindowId(pid: Int32) -> UInt32? {
           let w = fw, CFGetTypeID(w) == AXUIElementGetTypeID() else { return nil }
     return axElementWindowId(w as! AXUIElement)
 }
+
+func axWindowElement(pid: Int32, wid: UInt32) -> AXUIElement? {
+    guard wid != 0, AXIsProcessTrusted() else { return nil }
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(app, 1.5)
+    var windows: AnyObject?
+    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windows) == .success,
+          let arr = windows as? [AXUIElement] else { return nil }
+    for w in arr where axElementWindowId(w) == wid { return w }
+    return nil
+}
+
 func snapshotFocus(readKeyWindow: Bool = true) -> FocusSnapshot {
     var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: 0)
     _ = Sky.shared.SLPSGetFrontProcess?(&psn)

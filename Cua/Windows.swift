@@ -20,10 +20,16 @@ func runningApps() -> [[String:Any]] {
 func findPid(app: String?) -> Int32? {
     guard let app = app else { return nil }
     if let n = Int32(app) { return n }
-    for a in NSWorkspace.shared.runningApplications {
-        if (a.localizedName ?? "").lowercased() == app.lowercased() { return a.processIdentifier }
-        if (a.bundleIdentifier ?? "").lowercased() == app.lowercased() { return a.processIdentifier }
-        if (a.localizedName ?? "").lowercased().contains(app.lowercased()) { return a.processIdentifier }
+    let q = app.lowercased()
+    let apps = NSWorkspace.shared.runningApplications
+    // Exact bundle id/name first; substring matching is only a fallback.
+    for a in apps {
+        if (a.bundleIdentifier ?? "").lowercased() == q { return a.processIdentifier }
+        if (a.localizedName ?? "").lowercased() == q { return a.processIdentifier }
+    }
+    for a in apps {
+        if (a.localizedName ?? "").lowercased().contains(q) { return a.processIdentifier }
+        if (a.bundleIdentifier ?? "").lowercased().contains(q) { return a.processIdentifier }
     }
     return nil
 }
@@ -69,6 +75,13 @@ func windowBounds(wid: UInt32) -> CGRect? {
 }
 func windowOwnerPid(wid: UInt32) -> Int32? {
     for w in windowList(onscreenOnly: false) { if (w["wid"] as? Int) == Int(wid), let p = w["pid"] as? Int { return Int32(p) } }
+    return nil
+}
+func windowTitle(wid: UInt32) -> String? {
+    guard let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+    for w in list where (w[kCGWindowNumber as String] as? Int) == Int(wid) {
+        if let name = w[kCGWindowName as String] as? String, !name.isEmpty { return name }
+    }
     return nil
 }
 
