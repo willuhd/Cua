@@ -162,14 +162,16 @@ function sessionRow(s, showIcon){
   d.setAttribute('role','listitem');
   if (showIcon && s.icon) { const img = el('img'); img.src = 'data:image/png;base64,' + s.icon; d.append(img); }
   const n = el('div','n');
-  const name = el('span','name', s.app);
+  const name = el('span','name', s.scope === 'window' ? (s.windowTitle || ('Window ' + s.wid)) : s.app);
   const id = el('span','id', 'id: ' + (s.id || s.acquisitionId));
   id.title = 'Lease id — pass as acquisitionId';
+  const badge = el('span','badge' + (s.scope === 'window' ? ' win' : ''), s.scope === 'window' ? 'win' : 'app');
   const agent = el('span','agent', s.agent || '');
   agent.title = s.agent || '';
-  n.append(name, id, agent);
-  const b = el('button','inline','Free');
+  n.append(name, badge, id, agent);
+  const b = el('button','inline', s.scope === 'window' ? 'Free' : 'Free app');
   b.type = 'button';
+  b.title = s.scope === 'window' ? 'Free this window lease' : 'Free the app lease and all its windows';
   b.onclick = () => freeSession(s);
   d.append(n, b);
   return d;
@@ -182,7 +184,27 @@ function renderSessions(s){
     return;
   }
   L.replaceChildren();
-  for (const x of sessions) L.append(sessionRow(x, true));
+  const groups = new Map();
+  for (const x of sessions) {
+    if (!groups.has(x.pid)) groups.set(x.pid, []);
+    groups.get(x.pid).push(x);
+  }
+  for (const [, rows] of groups) {
+    const appRow = rows.find(x => x.scope === 'app');
+    const g = el('div','group');
+    const head = el('div','grouphead');
+    const icon = rows.find(x => x.icon)?.icon;
+    if (icon) { const img = el('img'); img.src = 'data:image/png;base64,' + icon; head.append(img); }
+    const name = rows[0].app + (appRow ? '' : ' · ' + rows.length + (rows.length === 1 ? ' window' : ' windows'));
+    head.append(el('span','gname', name));
+    g.append(head);
+    if (appRow) {
+      g.append(sessionRow(appRow, false));
+    } else {
+      for (const r of rows) g.append(sessionRow(r, false));
+    }
+    L.append(g);
+  }
 }
 
 function signature(s){
