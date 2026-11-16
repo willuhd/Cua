@@ -214,7 +214,19 @@ final class CuaEngine {
                                                         y: target.bounds.minY + y * target.bounds.height),
                                         normalized: CGPoint(x: x, y: y)))
         case .image:
-            return .failure(failure("NO_SNAPSHOT", "image coordinates are not available yet"))
+            guard let snap = SnapshotStore.shared.get(sessionID: s.id, wid: target.wid) else {
+                return .failure(failure("NO_SNAPSHOT", "image coordinates need a prior screenshot for this window",
+                                        hint: "Call screenshot first, or use coordSpace:'norm1000'."))
+            }
+            guard x >= 0, x <= Double(snap.imageWidth), y >= 0, y <= Double(snap.imageHeight),
+                  snap.imageWidth > 0, snap.imageHeight > 0 else {
+                return .failure(failure("BAD_COORDS", "image coordinates must be in 0...\(snap.imageWidth) by 0...\(snap.imageHeight)"))
+            }
+            let nx = snap.region.minX + (x / Double(snap.imageWidth)) * snap.region.width
+            let ny = snap.region.minY + (y / Double(snap.imageHeight)) * snap.region.height
+            return .success(MappedPoint(screen: CGPoint(x: target.bounds.minX + nx * target.bounds.width,
+                                                        y: target.bounds.minY + ny * target.bounds.height),
+                                        normalized: CGPoint(x: nx, y: ny)))
         }
     }
 
