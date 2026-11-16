@@ -44,6 +44,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = popVC
         popover.behavior = .transient
         popover.animates = true
+        popover.contentSize = NSSize(width: 360, height: 360)
+        popVC.onHeight = { [weak self] h in
+            self?.popover.contentSize = NSSize(width: 360, height: h)
+        }
 
         // Ask for permissions on first launch (no-ops if already granted)
         if !AXIsProcessTrusted() {
@@ -60,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func togglePopover() {
         guard let btn = statusItem.button else { return }
         if popover.isShown { popover.close() }
-        else { popVC.reload(); popover.show(relativeTo: btn.bounds, of: btn, preferredEdge: .minY) }
+        else { popVC.refresh(); popover.show(relativeTo: btn.bounds, of: btn, preferredEdge: .minY) }
     }
     func applicationWillTerminate(_ notification: Notification) {
         ForegroundCoordinator.shared.stop()

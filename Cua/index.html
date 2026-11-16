@@ -1,91 +1,232 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+<html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+<title>Cua</title>
 <style>
-html,body{background:transparent;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;font-size:13px;color:CanvasText;padding:10px 12px;box-sizing:border-box;user-select:none;-webkit-user-select:none;cursor:default}
-.head{display:flex;align-items:center;height:40px;gap:0}
-h1{font-size:30px;font-weight:200;letter-spacing:.5px;margin:0;line-height:40px;flex:0 0 auto}
-.portbox{margin-left:auto;display:flex;gap:5px;align-items:center}
-.portbox input{width:60px;height:26px;padding:0 7px;user-select:text;-webkit-user-select:text;cursor:text;border-radius:7px;border:1px solid color-mix(in srgb,CanvasText 22%,transparent);background:color-mix(in srgb,Canvas 88%,transparent);color:CanvasText;font:inherit;font-size:13px}
-button{padding:0 10px;height:26px;border-radius:7px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);background:color-mix(in srgb,Canvas 85%,transparent);color:CanvasText;cursor:pointer;font:inherit;font-size:12px;white-space:nowrap}
-button:hover{background:color-mix(in srgb,CanvasText 10%,transparent)}
-#quit{background:rgba(255,59,48,.08);border-color:rgba(255,59,48,.28);color:#ff3b30}
-#quit:hover{background:rgba(255,59,48,.16)}
-#list{margin-top:10px;min-height:120px}
-.sess{display:flex;gap:8px;align-items:center;padding:3px 2px}
-.sess+.sess{border-top:1px solid color-mix(in srgb,CanvasText 10%,transparent)}
-.sess img{width:20px;height:20px;border-radius:4px;flex:0 0 auto}
-.sess .n{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
-.sess button{height:22px;font-size:11px;padding:0 8px}
-.empty{color:color-mix(in srgb,CanvasText 60%,transparent);font-size:12px;padding:10px 2px}
-.perm{padding:6px 2px;font-size:13px}
-.perm+.perm{border-top:1px solid color-mix(in srgb,CanvasText 10%,transparent)}
-.perm .st{display:inline-block;width:20px;font-weight:600}
-.perm .ok{color:#30d158}.perm .bad{color:#ff453a}
-.perm button{margin-top:8px}
+  :root{
+    --hairline: rgba(127,127,127,.28);
+    --hairline-strong: rgba(127,127,127,.55);
+    --muted: rgba(127,127,127,.60);
+    --btn-bg: rgba(255,255,255,.10);
+    --btn-active: rgba(255,255,255,.24);
+  }
+  @supports (color: color-mix(in srgb, black, white)) {
+    :root{
+      --hairline: color-mix(in srgb, CanvasText 18%, transparent);
+      --hairline-strong: color-mix(in srgb, CanvasText 50%, transparent);
+      --muted: color-mix(in srgb, CanvasText 55%, transparent);
+    }
+  }
+  html,body{height:100%;margin:0;padding:0;overflow:hidden;overscroll-behavior:none;background:transparent}
+  body{display:flex;justify-content:center;font:13px -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:CanvasText;user-select:none;-webkit-user-select:none;cursor:default}
+  .app{display:flex;flex-direction:column;width:min(360px,calc(100vw - 24px));height:100%;padding:10px 12px;box-sizing:border-box}
+  .head{display:flex;align-items:center;height:40px;gap:6px;flex:0 0 auto}
+  h1{font-size:30px;font-weight:200;letter-spacing:.4px;margin:0;line-height:40px;flex:0 0 auto}
+  .portbox{margin-left:auto;display:flex;gap:5px;align-items:center}
+  .portbox input{width:60px;height:26px;padding:0 7px;box-sizing:border-box;user-select:text;-webkit-user-select:text;cursor:text;border-radius:6px;border:1px solid var(--hairline);background:transparent;color:CanvasText;font:inherit;font-size:12px;font-variant-numeric:tabular-nums;box-shadow:none;outline:none}
+  .portbox input:focus{outline:none;border-color:var(--hairline-strong)}
+  .portbox input::-webkit-inner-spin-button,.portbox input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+  button{-webkit-appearance:none;appearance:none;border:0;height:26px;padding:0 11px;border-radius:6px;font:400 13px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:CanvasText;cursor:default;white-space:nowrap;
+    background:var(--btn-bg);
+    -webkit-backdrop-filter:blur(20px) saturate(160%);
+    backdrop-filter:blur(20px) saturate(160%);
+    box-shadow:none;transition:none}
+  button:active{background:var(--btn-active)}
+  button:focus-visible{outline:2px solid -webkit-focus-ring-color;outline-offset:1px}
+  button:disabled{opacity:.45;pointer-events:none}
+  #quit{color:#fff;background:#ff3b30}
+  #quit:active{background:#ff6259}
+  .inline{height:21px;font-size:11px;padding:0 8px;border-radius:5px}
+  #perms,#fg{flex:0 0 auto}
+  .perm-card{display:flex;align-items:center;justify-content:center;gap:10px;padding:6px 0}
+  .perm-icon{width:44px;height:44px;flex:0 0 auto;display:flex;align-items:center;justify-content:center}
+  .perm-icon img{width:44px;height:44px;border-radius:10px;display:block}
+  .perm-rows{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}
+  .perm-row{display:flex;align-items:center;gap:6px;line-height:18px}
+  .perm-row .st{width:14px;text-align:center;font-weight:600}
+  .perm-row .ok{color:#30d158}.perm-row .bad{color:#ff453a}
+  .perm-actions{display:flex;gap:8px;justify-content:center;margin-top:8px}
+  .fg{margin:4px 0 8px;padding:9px 10px;border-radius:8px;background:var(--btn-bg);font-size:12px}
+  .fg .title{font-weight:600;margin-bottom:3px}
+  .fg .meta{color:var(--muted);line-height:1.35;margin-bottom:7px}
+  .fg .actions{display:flex;gap:8px;justify-content:center}
+  .fg button{height:24px;font-size:11px;padding:0 9px;border-radius:5px}
+  .fg .stop{color:#ff453a}
+  #list{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;margin-top:2px;padding-right:1px}
+  #list::-webkit-scrollbar{width:8px}
+  #list::-webkit-scrollbar-thumb{background:rgba(127,127,127,.28);border-radius:4px}
+  #list::-webkit-scrollbar-track{background:transparent}
+  .group{margin:4px 0 6px}
+  .grouphead{display:flex;align-items:center;gap:7px;padding:2px 2px 4px;min-width:0}
+  .grouphead img{width:18px;height:18px;border-radius:4px;flex:0 0 auto}
+  .grouphead .gname{font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sess{display:flex;gap:8px;align-items:center;padding:4px 2px;min-width:0}
+  .sess+.sess{border-top:.5px solid var(--hairline)}
+  .sess img{width:20px;height:20px;border-radius:4px;flex:0 0 auto}
+  .sess .n{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px}
+  .sess .name{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sess .id{flex:0 0 auto;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);letter-spacing:.15px;user-select:text;-webkit-user-select:text;cursor:text}
+  .badge{flex:0 0 auto;font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border:.5px solid var(--hairline);border-radius:4px;padding:1px 4px}
+  .badge.win{margin-left:2px}
+  .agent{flex:0 0 auto;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--muted)}
+  .sess button{height:21px;font-size:10.5px;padding:0 8px}
+  .empty{color:var(--muted);font-size:12px;padding:10px 2px}
+  @media (min-width:480px){
+    html,body{background:Canvas}
+    body{align-items:center;padding:32px 16px;box-sizing:border-box}
+    .app{width:360px;height:auto;max-height:calc(100vh - 64px);padding:12px;background:transparent;box-shadow:none;border-radius:0}
+    #list{max-height:360px}
+  }
+  @media (prefers-color-scheme: light){
+    :root{--btn-bg:rgba(255,255,255,.52);--btn-active:rgba(255,255,255,.82)}
+  }
+  @media (prefers-reduced-transparency: reduce){
+    button,.fg{background:Canvas;-webkit-backdrop-filter:none;backdrop-filter:none}
+  }
+  @media (prefers-contrast: more){
+    button,.fg{box-shadow:inset 0 0 0 1px CanvasText}
+  }
+
 </style></head><body>
-<div class="head"><h1>Cua</h1><div class="portbox"><input id="port" type="number" min="1024" max="65535"><button id="apply">Apply</button><button id="copy" title="Copy setup prompt">Copy</button><button id="quit" title="Quit Cua">Quit</button></div></div>
-<div id="list"><div class="empty">No apps held.</div></div>
+<main class="app">
+  <div class="head">
+    <h1>Cua</h1>
+    <div class="portbox">
+      <input id="port" type="number" min="1024" max="65535" aria-label="MCP port">
+      <button id="apply" type="button">Apply</button>
+      <button id="copy" type="button" title="Copy setup prompt">Copy</button>
+      <button id="quit" type="button" title="Quit Cua">Quit</button>
+    </div>
+  </div>
+  <div id="perms"></div>
+  <div id="fg"></div>
+  <section id="list" role="list" aria-label="Agent leases" aria-live="polite"></section>
+</main>
 <script>
-let state=null;
-async function fetchState(){ return (await (await fetch('/api/state')).json()); }
+let state = null;
+let lastSig = "";
+let lastHeight = 0;
+let inFlight = false;
+
+const $ = id => document.getElementById(id);
+
+async function postJSON(path, body){
+  const headers = {'Content-Type':'application/json'};
+  if (window.__CUA_UI_TOKEN) headers['X-Cua-UI-Token'] = window.__CUA_UI_TOKEN;
+  return fetch(path, {method:'POST', headers, body:JSON.stringify(body || {})});
+}
+function el(tag, cls, text){
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+function postHeight(){
+  if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.cuaHeight) return;
+  const head = document.querySelector('.head');
+  const perms = $('perms'), fg = $('fg'), list = $('list');
+  const listContent = Array.from(list.children).reduce((sum, n) => sum + n.getBoundingClientRect().height, 0);
+  const desired = 12 + (head?.offsetHeight || 40) + perms.offsetHeight + fg.offsetHeight + Math.min(listContent, 320) + 12;
+  const h = Math.max(150, Math.min(420, Math.round(desired)));
+  if (h !== lastHeight) {
+    lastHeight = h;
+    window.webkit.messageHandlers.cuaHeight.postMessage(h);
+  }
+}
 function renderPerms(s){
- const L=document.getElementById('list');
- if(s.ax && s.scr){ renderSessions(s); return; }
- L.innerHTML='';
- const rows=[
-  {ok:s.scr, label:'Screen Recording'},
-  {ok:s.ax, label:'Accessibility'},
- ];
- for(const r of rows){
-  const d=document.createElement('div');d.className='perm';
-  const st=document.createElement('span');st.className='st '+(r.ok?'ok':'bad');st.textContent=r.ok?'✓':'✕';
-  d.append(st,document.createTextNode(' '+r.label));
-  L.append(d);
- }
- const b=document.createElement('button');b.textContent='Open Settings';b.style.marginTop='10px';
- b.onclick=async()=>{await fetch('/api/open-settings',{method:'POST'});};
- const wrap=document.createElement('div');wrap.className='perm';wrap.append(b);L.append(wrap);
- const g=document.createElement('button');g.textContent='Grant permissions';g.style.marginTop='6px';
- g.onclick=async()=>{await fetch('/api/grant',{method:'POST'});setTimeout(refresh,900);};
- wrap.append(g);
+  const P = $('perms');
+  if (s.ax && s.scr) { P.replaceChildren(); return; }
+  P.replaceChildren();
+  const card = el('div','perm-card');
+  const rows = el('div','perm-rows');
+  for (const r of [{ok:s.scr, label:'Screen Recording'}, {ok:s.ax, label:'Accessibility'}]) {
+    const d = el('div','perm-row');
+    const st = el('span','st ' + (r.ok ? 'ok' : 'bad'), r.ok ? '✓' : '✕');
+    d.append(st, document.createTextNode(r.label));
+    rows.append(d);
+  }
+  card.append(rows);
+  P.append(card);
+  const actions = el('div','perm-actions');
+  const open = el('button', null, 'Open Settings'); open.type = 'button';
+  open.onclick = async () => { await postJSON('/api/open-settings', {}); };
+  const grant = el('button', null, 'Grant permissions'); grant.type = 'button';
+  grant.onclick = async () => { await postJSON('/api/grant', {}); setTimeout(refresh, 900); };
+  actions.append(open, grant);
+  P.append(actions);
+}
+function freeSession(s){
+  return postJSON('/api/free', s.scope === 'window' ? {pid:s.pid, wid:s.wid} : {pid:s.pid}).then(refresh);
+}
+function sessionRow(s, showIcon){
+  const d = el('div','sess');
+  d.setAttribute('role','listitem');
+  if (showIcon && s.icon) { const img = el('img'); img.src = 'data:image/png;base64,' + s.icon; d.append(img); }
+  const n = el('div','n');
+  const name = el('span','name', s.app);
+  const id = el('span','id', 'id: ' + (s.id || s.acquisitionId));
+  id.title = 'Lease id — pass as acquisitionId';
+  const agent = el('span','agent', s.agent || '');
+  agent.title = s.agent || '';
+  n.append(name, id, agent);
+  const b = el('button','inline','Free');
+  b.type = 'button';
+  b.onclick = () => freeSession(s);
+  d.append(n, b);
+  return d;
 }
 function renderSessions(s){
- const L=document.getElementById('list');
- if(!s.sessions||!s.sessions.length){L.innerHTML='<div class="empty">No apps held.</div>';return;}
- L.innerHTML='';
- for(const x of s.sessions){
-  const d=document.createElement('div');d.className='sess';
-  if(x.icon){const img=document.createElement('img');img.src='data:image/png;base64,'+x.icon;d.append(img);}
-  const n=document.createElement('div');n.className='n';n.textContent=x.app;
-  const b=document.createElement('button');b.textContent='Free';
-  b.title='Frees the lease — next acquire gets a fresh ID. Old ID becomes invalid.';
-  b.onclick=async()=>{await fetch('/api/free',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid:x.pid})});refresh();};
-  d.append(n,b);L.append(d);
- }
+  const L = $('list');
+  const sessions = (s.sessions || []).filter(x => x.scope !== 'foreground');
+  if (!sessions.length) {
+    L.replaceChildren(el('div','empty', 'No apps held.'));
+    return;
+  }
+  L.replaceChildren();
+  for (const x of sessions) L.append(sessionRow(x, true));
+}
+
+function signature(s){
+  return JSON.stringify({
+    ax:s.ax, scr:s.scr, port:s.port,
+    sessions:(s.sessions || []).map(x => [x.pid, x.id, x.scope, x.wid, x.app, x.windowTitle, x.agent])
+  });
 }
 function render(s){
- if(s.ax && s.scr) renderSessions(s);
- else renderPerms(s);
+  renderPerms(s);
+  renderSessions(s);
+  postHeight();
 }
 async function refresh(){
- try{ state=await fetchState(); }catch(e){ return; }
- document.getElementById('port').value=state.port;
- render(state);
+  if (document.hidden || inFlight) return;
+  inFlight = true;
+  let s;
+  try { s = await (await fetch('/api/state', {cache:'no-store'})).json(); }
+  catch (e) { inFlight = false; return; }
+  inFlight = false;
+  state = s;
+  const port = $('port');
+  if (document.activeElement !== port) port.value = s.port;
+  const sig = signature(s);
+  if (sig !== lastSig) { lastSig = sig; render(s); }
+  else postHeight();
 }
-document.getElementById('apply').onclick=async()=>{
- const v=+document.getElementById('port').value;
- if(v>=1024&&v<=65535){await fetch('/api/port',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({port:v})});setTimeout(refresh,200);}
+$('apply').onclick = async () => {
+  const v = +$('port').value;
+  if (v >= 1024 && v <= 65535) {
+    const r = await postJSON('/api/port', {port:v});
+    if (r.ok) setTimeout(() => { location.replace('http://127.0.0.1:' + v + '/'); }, 450);
+  }
 };
-document.getElementById('copy').onclick=async()=>{
- const url='http://127.0.0.1:'+document.getElementById('port').value+'/mcp';
- const prompt='Setup prompt for Cua: the mcp.json is `'+JSON.stringify({mcpServers:{cua:{url:url}}})+'`, add it to the harness of my choice. Ask me a question on the specifics..';
- await navigator.clipboard.writeText(prompt);
- const b=document.getElementById('copy');b.textContent='Copied!';setTimeout(()=>b.textContent='Copy',1200);
+$('copy').onclick = async () => {
+  const p = state && state.port ? state.port : $('port').value;
+  const url = 'http://127.0.0.1:' + p + '/mcp';
+  const prompt = 'Setup prompt for Cua: the mcp.json is `' + JSON.stringify({mcpServers:{cua:{url:url}}}) + '`, add it to the harness of my choice. Ask me a question on the specifics.';
+  try { await navigator.clipboard.writeText(prompt); } catch (e) { return; }
+  const b = $('copy'); b.textContent = 'Copied!'; setTimeout(() => b.textContent = 'Copy', 1200);
 };
-document.getElementById('quit').onclick=async()=>{await fetch('/api/quit',{method:'POST'});};
-// Permissions are checked on focus (not polled) — sessions poll every 1s.
-window.addEventListener('focus',refresh);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
-refresh();setInterval(refresh,1000);
+$('quit').onclick = async () => { await postJSON('/api/quit', {}); };
+window.addEventListener('focus', refresh);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+refresh();
+setInterval(refresh, 1000);
 </script></body></html>

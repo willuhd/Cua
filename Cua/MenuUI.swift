@@ -29,9 +29,13 @@ let webUIHTML: String = {
 }()
 
 // MARK: – menubar UI
-final class PopoverVC: NSViewController, WKNavigationDelegate {
+final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHandler {
     var webView: WKWebView!
+    var heightConstraint: NSLayoutConstraint!
+    var onHeight: ((CGFloat) -> Void)?
+
     func url() -> URL { URL(string: "http://127.0.0.1:\(MCPServer.shared.port)/")! }
+
     override func loadView() {
         // Single material: the popover window's own glass. No inner effect view
         // (its edge is the seam at the arrow). Plain layer-backed container just
@@ -44,6 +48,8 @@ final class PopoverVC: NSViewController, WKNavigationDelegate {
         view = fx
 
         let wm = WKWebViewConfiguration()
+        wm.websiteDataStore = .nonPersistent()
+        wm.userContentController.add(self, name: "cuaHeight")
         webView = WKWebView(frame: .zero, configuration: wm)
         webView.underPageBackgroundColor = .clear
         webView.setValue(false, forKey: "drawsBackground")
@@ -54,18 +60,36 @@ final class PopoverVC: NSViewController, WKNavigationDelegate {
         webView.layer?.shadowOpacity = 0
         webView.translatesAutoresizingMaskIntoConstraints = false
         fx.addSubview(webView)
+        heightConstraint = fx.heightAnchor.constraint(equalToConstant: 360)
         NSLayoutConstraint.activate([
             fx.widthAnchor.constraint(equalToConstant: 360),
-            fx.heightAnchor.constraint(equalToConstant: 360),
+            heightConstraint,
             webView.topAnchor.constraint(equalTo: fx.topAnchor),
             webView.bottomAnchor.constraint(equalTo: fx.bottomAnchor),
             webView.leadingAnchor.constraint(equalTo: fx.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: fx.trailingAnchor),
         ])
+        preferredContentSize = NSSize(width: 360, height: 360)
         webView.navigationDelegate = self
         webView.load(URLRequest(url: url()))
         probe()
     }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "cuaHeight" {
+            let raw: CGFloat
+            if let n = message.body as? NSNumber { raw = CGFloat(truncating: n) }
+            else if let d = message.body as? Double { raw = CGFloat(d) }
+            else { return }
+            let h = max(150, min(420, raw))
+            guard abs(h - heightConstraint.constant) > 0.5 else { return }
+            heightConstraint.constant = h
+            preferredContentSize = NSSize(width: 360, height: h)
+            onHeight?(h)
+            return
+        }
+    }
+
     func probe() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
             guard let w = self?.webView else { return }
@@ -79,6 +103,14 @@ final class PopoverVC: NSViewController, WKNavigationDelegate {
     func updateTable() {
         guard isViewLoaded else { return }
         // JS polls /api/state itself; nothing to do here. Keep symbol for AppDelegate.
+    }
+    func refresh() {
+        guard isViewLoaded else { return }
+        if webView.url?.absoluteString == url().absoluteString {
+            webView.evaluateJavaScript("refresh()")
+        } else {
+            webView.load(URLRequest(url: url()))
+        }
     }
     func reload() {
         guard isViewLoaded else { return }
