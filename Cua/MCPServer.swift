@@ -18,7 +18,7 @@ func toolResultText(_ text: String, isError: Bool = false, structured: [String: 
 }
 func toolResultImage(png: Data, caption: String, structured: [String: Any]? = nil) -> [String: Any] {
     let b64 = png.base64EncodedString()
-    var content: [[String: Any]] = [
+    let content: [[String: Any]] = [
         ["type": "text", "text": caption],
         ["type": "image", "data": b64, "mimeType": "image/png"]
     ]
@@ -35,25 +35,28 @@ func toolDefs() -> [[String: Any]] {
     let pidProp: [String: Any] = ["type": "number", "description": "Target pid"]
     let appProp: [String: Any] = ["type": "string", "description": "App name or bundle id (alternative to pid)"]
     let idProp: [String: Any] = ["type": "string", "description": "acquisitionId from acquire — required on every call after acquire"]
-    let widProp: [String: Any] = ["type": "number", "description": "Window id (default: main window of pid)"]
-    let coordProp: [String: Any] = ["type": "string", "enum": ["image", "norm1000", "norm1", "screen"],
-                                   "description": "Coordinate space. Lease default is set by acquire (norm1000 unless overridden). image = pixels in the last screenshot/zoom; norm1000 = 0...1000 window-relative; norm1 = 0...1; screen = absolute points (app/foreground leases only)."]
-    let bgProp: [String: Any] = ["type": "boolean", "description": "Background delivery (default true). False posts to HID tap — avoid while user works."]
+    let widProp: [String: Any] = ["type": "number", "description": "Window id. App leases default to the main window; window leases are fixed to their wid."]
+    let bgProp: [String: Any] = ["type": "boolean", "description": "Background delivery (default true)."]
     let focusProp: [String: Any] = ["type": "boolean", "description": "Briefly take key focus via focus-without-raise, then restore exact window (default false)"]
+    let coordProp: [String: Any] = ["type": "string", "enum": ["image", "norm1000", "norm1", "screen"],
+                                   "description": "Coordinate space. Lease default is set by acquire (norm1000 unless overridden). image = pixels in the last screenshot/zoom; norm1000 = 0...1000 window-relative; norm1 = 0...1; screen = absolute points (app leases only)."]
+    let regionProp: [String: Any] = ["type": "object", "description": "Normalized crop {x,y,width,height} in 0...1 relative to the window; defaults to the full window."]
     return [
-        ["name": "list_apps", "description": "List running apps and which are held by Cua sessions", "inputSchema": obj([:], required: [])],
-        ["name": "windows", "description": "List windows (optionally for one pid/app)", "inputSchema": obj(["pid": pidProp, "app": appProp, "all": ["type": "boolean"]], required: [])],
-        ["name": "acquire", "description": "Acquire an app lease. Returns acquisitionId and the lease coordinate space. Fails with LEASE_HELD if held — ask the user to free it in the Cua menubar UI.", "inputSchema": obj(["pid": pidProp, "app": appProp, "coordSpace": coordProp, "agentLabel": ["type": "string"]], required: [])],
-        ["name": "release", "description": "Release an app lease (normal exit).", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp], required: ["acquisitionId"])],
-        ["name": "screenshot", "description": "Capture a window as inline image (ImageContent, in-memory). Optional grid/cursor overlay.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "grid": ["type": "number"], "cursor": ["type": "string", "description": "x,y or last"], "clean": ["type": "boolean"], "coordSpace": coordProp], required: ["acquisitionId"])],
+        ["name": "list_apps", "description": "List running apps, held leases, and coordinate-space defaults.", "inputSchema": obj([:], required: [])],
+        ["name": "windows", "description": "List windows (optionally for one pid/app).", "inputSchema": obj(["pid": pidProp, "app": appProp, "all": ["type": "boolean"]], required: [])],
+        ["name": "acquire", "description": "Acquire an app lease (default) or a window lease. Returns acquisitionId plus the coordinate space and window target. App and window leases for one pid are mutually exclusive; multiple window leases may coexist. Fails with LEASE_HELD if the target is held.", "inputSchema": obj(["pid": pidProp, "app": appProp, "scope": ["type": "string", "enum": ["app", "window"], "description": "app (default) or window"], "wid": widProp, "coordSpace": coordProp, "agentLabel": ["type": "string"]], required: [])],
+        ["name": "release", "description": "Release an app or window lease.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp], required: ["acquisitionId"])],
+        ["name": "screenshot", "description": "Capture a window (or the display when wid=0) as an inline PNG. Returns snapshotId, image dimensions, window bounds, crop region, scale, and coordinate space. Optional normalized region, grid, and cursor overlay.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "region": regionProp, "maxDimension": ["type": "number", "description": "Long-edge cap in pixels (default 1600; full-resolution source is cached for zoom)"], "grid": ["type": "number"], "cursor": ["type": "string", "description": "x,y in the lease coordinate space, or last"], "clean": ["type": "boolean"], "coordSpace": coordProp], required: ["acquisitionId"])],
+        ["name": "zoom", "description": "Return a clear crop of the target window, around a preset region or a point. part = top-left|top-right|bottom-left|bottom-right|center|cursor (cursor uses the lease's last agent cursor); at/x,y centers a crop. Crops the cached full-resolution screenshot without upscaling.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "part": ["type": "string", "enum": ["top-left", "top-right", "bottom-left", "bottom-right", "center", "cursor"]], "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "size": ["type": "number", "description": "Crop fraction 0.1...1.0 (default 0.5, or 0.25 for cursor)"], "maxDimension": ["type": "number", "description": "Long-edge cap in pixels (default 768)"], "fresh": ["type": "boolean", "description": "Recapture instead of using the last snapshot"], "coordSpace": coordProp], required: ["acquisitionId"])],
         ["name": "move", "description": "Set the lease's virtual cursor position and return a screenshot with the crosshair. Does not post a mouse event; use hover for that.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "grid": ["type": "number"], "coordSpace": coordProp], required: ["acquisitionId"])],
-        ["name": "click", "description": "Background click routed to window (no focus change by default).", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "double": ["type": "boolean"], "right": ["type": "boolean"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
+        ["name": "hover", "description": "Move the agent pointer to a point in the target window without clicking. Posts a real mouseMoved (background) so hover states and tooltips can appear, then returns a screenshot.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "grid": ["type": "number"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
+        ["name": "click", "description": "Click at a point in the target window. Background by default. Coordinates use the lease coordinate space unless coordSpace overrides.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "double": ["type": "boolean"], "right": ["type": "boolean"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
         ["name": "type", "description": "Type unicode text (keycode 0 + unicode; games need key).", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "text": ["type": "string"], "bg": bgProp, "focus": focusProp], required: ["acquisitionId", "text"])],
         ["name": "key", "description": "Virtual keycode (+modifiers, optional unicode char, hold ms).", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "code": ["type": "number"], "shift": ["type": "boolean"], "ctrl": ["type": "boolean"], "alt": ["type": "boolean"], "cmd": ["type": "boolean"], "fn": ["type": "boolean"], "char": ["type": "string"], "holdMs": ["type": "number"], "bg": bgProp, "focus": focusProp], required: ["acquisitionId", "code"])],
-        ["name": "scroll", "description": "Pixel scroll at a point.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "dx": ["type": "number"], "dy": ["type": "number"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
-        ["name": "drag", "description": "Drag from one point to another (12 steps).", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "fromX": ["type": "number"], "fromY": ["type": "number"], "toX": ["type": "number"], "toY": ["type": "number"], "from": ["type": "string"], "to": ["type": "string"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
-        ["name": "ax", "description": "Accessibility tree dump (positional index; same walk as press).", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "depth": ["type": "number"], "maxNodes": ["type": "number"]], required: ["acquisitionId"])],
-        ["name": "press", "description": "AXPress by positional index (guard with expectRole/expectTitle).", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "index": ["type": "number"], "depth": ["type": "number"], "maxNodes": ["type": "number"], "expectRole": ["type": "string"], "expectTitle": ["type": "string"]], required: ["acquisitionId", "index"])],
+        ["name": "scroll", "description": "Pixel scroll at a point in the target window. Positive dy scrolls content up; dx/dy default to 0.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "dx": ["type": "number"], "dy": ["type": "number"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
+        ["name": "drag", "description": "Left-button drag from one point to another. Background by default; supports steps, stepMs, startHoldMs, endHoldMs.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "fromX": ["type": "number"], "fromY": ["type": "number"], "toX": ["type": "number"], "toY": ["type": "number"], "from": ["type": "string"], "to": ["type": "string"], "steps": ["type": "number"], "stepMs": ["type": "number"], "startHoldMs": ["type": "number"], "endHoldMs": ["type": "number"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
+        ["name": "ax", "description": "Accessibility tree dump for the lease target (positional index; same walk as press). Window leases walk only that window.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "depth": ["type": "number"], "maxNodes": ["type": "number"]], required: ["acquisitionId"])],
+        ["name": "press", "description": "AXPress by positional index (guard with expectRole/expectTitle). Window leases act only inside that window.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "index": ["type": "number"], "depth": ["type": "number"], "maxNodes": ["type": "number"], "expectRole": ["type": "string"], "expectTitle": ["type": "string"]], required: ["acquisitionId", "index"])],
     ]
 }
 
@@ -109,29 +112,70 @@ final class MCPServer: NSObject {
     var mcpSessions: [String: Date] = [:]
     var mcpLock = NSLock()
     var queue = DispatchQueue(label: "cua.mcp", qos: .userInitiated, attributes: .concurrent)
-    // CuaEngine drives real mouse/keyboard state and is not reentrant; tool calls (and
-    // lease changes) stay serialized here, off the socket queue.
-    let toolQueue = DispatchQueue(label: "cua.tools", qos: .userInitiated)
+    // Control-plane calls (lease changes, listing) are serialized. Read-only
+    // lease calls (screenshot/AX/zoom) use a per-lease queue, so two windows
+    // can be observed concurrently. Every input gesture takes the one global
+    // InputGate, matching the single hardware pointer/focus.
+    let controlQueue = DispatchQueue(label: "cua.control", qos: .userInitiated)
+    let inputQueue = DispatchQueue(label: "cua.input", qos: .userInitiated)
+    private let leaseQueueLock = NSLock()
+    private var leaseQueues: [String: DispatchQueue] = [:]
+    private let controlTools: Set<String> = ["list_apps", "windows", "acquire", "release"]
+    private let inputTools: Set<String> = ["click", "type", "key", "scroll", "drag", "hover", "press"]
     let connGate = DispatchSemaphore(value: 8)
     var onStateChange: (() -> Void)?
+    private let iconLock = NSLock()
+    private var iconCache: [Int32: (String, Date)] = [:]
+
+    private func queueForLease(_ id: String) -> DispatchQueue {
+        let key = id.lowercased()
+        leaseQueueLock.lock(); defer { leaseQueueLock.unlock() }
+        if let q = leaseQueues[key] { return q }
+        let q = DispatchQueue(label: "cua.lease.\(key)", qos: .userInitiated)
+        leaseQueues[key] = q
+        return q
+    }
+
+    private func dropLeaseQueue(_ id: String) {
+        leaseQueueLock.lock(); leaseQueues.removeValue(forKey: id.lowercased()); leaseQueueLock.unlock()
+    }
+
+    func runTool(name: String, args: [String: Any]) -> [String: Any] {
+        var result: [String: Any] = [:]
+        if inputTools.contains(name) {
+            InputGate.shared.withLock {
+                inputQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
+            }
+        } else if controlTools.contains(name) {
+            controlQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
+        } else if let id = args["acquisitionId"] as? String, !id.isEmpty {
+            queueForLease(id).sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
+        } else {
+            controlQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
+        }
+        if name == "release", let id = args["acquisitionId"] as? String {
+            dropLeaseQueue(id)
+        }
+        return result
+    }
     // A peer that connects and then says nothing would otherwise pin a worker forever,
     // so every socket gets read/write deadlines.
     static let ioTimeout = timeval(tv_sec: 10, tv_usec: 0)
     static let maxHeadBytes = 64 * 1024
     static let maxBodyBytes = 8 * 1024 * 1024
 
-    func start(port: UInt16) {
-        // Same port already listening: keep the socket (a cancel+rebind on the same
-        // port races the close and fails with "Address already in use").
-        if port == self.port && listenFd >= 0 {
-            UserDefaults.standard.set(Int(port), forKey: "mcpPort")
-            return
-        }
-        self.port = port
-        UserDefaults.standard.set(Int(port), forKey: "mcpPort")
-        stop()
+    static func allowedHost(_ host: String?, port: UInt16) -> Bool {
+        guard let host = host?.lowercased(), !host.isEmpty else { return true }
+        return host == "127.0.0.1:\(port)" || host == "localhost:\(port)"
+    }
+    static func allowedOrigin(_ origin: String?, port: UInt16) -> Bool {
+        guard let origin = origin?.lowercased(), !origin.isEmpty else { return true }
+        return origin == "http://127.0.0.1:\(port)" || origin == "http://localhost:\(port)"
+    }
+
+    private static func makeListener(port: UInt16) -> Int32? {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { clog("socket failed"); return }
+        guard fd >= 0 else { clog("socket failed"); return nil }
         var one: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
         var addr = sockaddr_in()
@@ -143,12 +187,33 @@ final class MCPServer: NSObject {
                 Darwin.bind(fd, sptr, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        guard ok == 0 else { clog("bind 127.0.0.1:\(port) failed: \(String(cString: strerror(errno)))"); close(fd); return }
-        guard listen(fd, 128) == 0 else { clog("listen failed: \(String(cString: strerror(errno)))"); close(fd); return }
+        guard ok == 0 else {
+            clog("bind 127.0.0.1:\(port) failed: \(String(cString: strerror(errno)))")
+            close(fd); return nil
+        }
+        guard listen(fd, 128) == 0 else {
+            clog("listen failed: \(String(cString: strerror(errno)))")
+            close(fd); return nil
+        }
+        return fd
+    }
+
+    func start(port: UInt16) {
+        // Bind the new port before retiring the old listener, so a failed port
+        // change leaves the working server exactly where it was.
+        if port == self.port && listenFd >= 0 {
+            UserDefaults.standard.set(Int(port), forKey: "mcpPort")
+            return
+        }
+        guard let fd = Self.makeListener(port: port) else { return }
+        let old = listenFd
         listenFd = fd
+        self.port = port
+        UserDefaults.standard.set(Int(port), forKey: "mcpPort")
         isRunning = true
         clog("listening 127.0.0.1:\(port)")
         onStateChange?()
+        if old >= 0 { shutdown(old, SHUT_RDWR); close(old) }
         let acceptQ = DispatchQueue(label: "cua.accept", qos: .userInitiated)
         let gen = bumpAcceptGeneration()
         acceptQ.async { [weak self] in
@@ -199,6 +264,10 @@ final class MCPServer: NSObject {
         var chunk = [UInt8](repeating: 0, count: 65536)
         while true {
             if let (req, bodyLen) = Self.parseHTTPHead(buf) {
+                if bodyLen < 0 {
+                    send(fd, status: "400 Bad Request", body: Data("{\"error\":\"bad content-length\"}".utf8))
+                    return
+                }
                 if bodyLen > Self.maxBodyBytes {
                     send(fd, status: "413 Payload Too Large", body: Data("{\"error\":\"body too large\"}".utf8))
                     return
@@ -258,7 +327,14 @@ final class MCPServer: NSObject {
             let kv = line.split(separator: ":", maxSplits: 1)
             if kv.count == 2 { headers[kv[0].trimmingCharacters(in: .whitespaces).lowercased()] = kv[1].trimmingCharacters(in: .whitespaces) }
         }
-        let len = Int(headers["content-length"] ?? "0") ?? 0
+        var len = 0
+        if let rawLen = headers["content-length"] {
+            guard let parsed = Int(rawLen), parsed >= 0 else {
+                let req = HTTPReq(method: String(parts[0]), path: String(parts[1]), headers: headers, headLen: headData.count)
+                return (req, -1)
+            }
+            len = parsed
+        }
         // Byte count, not String count: headLen indexes into the raw buffer.
         let headLen = headData.count
         return (HTTPReq(method: String(parts[0]), path: String(parts[1]), headers: headers, headLen: headLen), len)
@@ -275,14 +351,26 @@ final class MCPServer: NSObject {
             guard let lineEnd = data.range(of: Data("\r\n".utf8), in: i..<data.endIndex) else { return nil }
             let line = String(decoding: data[i..<lineEnd.lowerBound], as: UTF8.self)
             let token = line.split(separator: ";")[0].trimmingCharacters(in: .whitespaces)
-            guard let size = Int(token, radix: 16), size >= 0 else { return nil }
+            guard let size = Int(token, radix: 16), size >= 0, size <= Self.maxBodyBytes else { return nil }
             if size == 0 { return out }                     // last chunk (trailers ignored)
             let start = lineEnd.upperBound
-            guard data.endIndex - start >= size + 2 else { return nil }
+            guard size <= data.endIndex - start, data.endIndex - start - size >= 2 else { return nil }
             out.append(data[start..<start + size])
             i = start + size + 2
         }
     }
+    func iconBase64Cached(pid: Int32) -> String {
+        iconLock.lock()
+        if let cached = iconCache[pid], Date().timeIntervalSince(cached.1) < 60 {
+            iconLock.unlock()
+            return cached.0
+        }
+        iconLock.unlock()
+        let value = Self.iconBase64(pid: pid)
+        iconLock.lock(); iconCache[pid] = (value, Date()); iconLock.unlock()
+        return value
+    }
+
     static func iconBase64(pid: Int32) -> String {        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid }),
               let icon = app.icon else { return "" }
         let size = 40
@@ -298,43 +386,75 @@ final class MCPServer: NSObject {
     }
     func process(req: HTTPReq, body: Data, fd: Int32) {
         let pathOnly = String(req.path.split(separator: "?")[0])
+        let host = req.headers["host"]
+        let origin = req.headers["origin"]
+        if !Self.allowedHost(host, port: port) {
+            send(fd, status: "403 Forbidden", body: Data("{\"error\":\"invalid host\"}".utf8))
+            return
+        }
+        if let origin = origin, !Self.allowedOrigin(origin, port: port) {
+            send(fd, status: "403 Forbidden", body: Data("{\"error\":\"invalid origin\"}".utf8))
+            return
+        }
+        let isJSON = (req.headers["content-type"] ?? "").lowercased().contains("application/json")
         // --- Web UI + APIs for the transparent WebView popover (native glass behind) ---
         if pathOnly == "/" || pathOnly == "/index.html" {
             guard req.method == "GET" else { send(fd, status: "405 Method Not Allowed", body: Data(), extraHeaders: [:]); return }
-            send(fd, status: "200 OK", body: webUIHTML.data(using: .utf8)!, extraHeaders: ["Content-Type": "text/html; charset=utf-8"])
+            send(fd, status: "200 OK", body: webUIHTML.data(using: .utf8)!, extraHeaders: ["Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"])
             return
         }
         if pathOnly == "/api/state" && req.method == "GET" {
             let sessions = SessionStore.shared.sessions().map { s -> [String: Any] in
-                ["pid": Int(s.pid), "app": s.appName, "agent": s.agentLabel ?? "unknown", "id": s.id, "acquisitionId": s.id, "coordSpace": s.coordSpace.rawValue, "icon": Self.iconBase64(pid: s.pid)]
+                var d: [String: Any] = ["pid": Int(s.pid), "app": s.appName, "agent": s.agentLabel ?? "unknown",
+                                         "id": s.id, "acquisitionId": s.id, "scope": s.scope.rawValue,
+                                         "coordSpace": s.coordSpace.rawValue, "icon": iconBase64Cached(pid: s.pid)]
+                if let wid = s.wid {
+                    d["wid"] = Int(wid)
+                    if let title = windowTitle(wid: wid) { d["windowTitle"] = title }
+                }
+                return d
             }
             let ax = AXIsProcessTrusted(); let scr = CGPreflightScreenCaptureAccess()
             let missing = [ax ? nil : "Accessibility", scr ? nil : "Screen Recording"].compactMap { $0 }.joined(separator: " + ")
             let perms = (ax && scr) ? "Permissions OK (Accessibility + Screen Recording)." : "Missing: \(missing). Grant as Cua.app via the button below."
-            let payload: [String: Any] = ["port": Int(port), "url": "http://127.0.0.1:\(port)/mcp", "perms": perms, "ax": ax, "scr": scr, "sessions": sessions]
-            send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
+            let payload: [String: Any] = ["port": Int(port), "url": "http://127.0.0.1:\(port)/mcp", "perms": perms,
+                                          "ax": ax, "scr": scr, "sessions": sessions]
+            send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: ["Cache-Control": "no-store"])
             return
         }
         if pathOnly == "/api/free" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
             let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
-            if let pid = (obj["pid"] as? Int) ?? (obj["pid"] as? Double).map({ Int($0) }) {
-                toolQueue.sync { SessionStore.shared.free(pid: Int32(pid)) }
+            if let pid = (obj["pid"] as? Int) ?? (obj["pid"] as? Double).flatMap({ Int(exactly: $0) }) {
+                let wid = (obj["wid"] as? Int) ?? (obj["wid"] as? Double).flatMap({ Int(exactly: $0) })
+                let p32 = Int32(clamping: pid)
+                let w32 = wid.flatMap { $0 > 0 && $0 <= Int(UInt32.max) ? UInt32($0) : nil }
+                controlQueue.sync {
+                    SessionStore.shared.free(pid: p32, wid: w32)
+                }
                 onStateChange?()
             }
             send(fd, status: "200 OK", body: "{\"ok\":true}".data(using: .utf8)!, extraHeaders: [:])
             return
         }
         if pathOnly == "/api/port" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
             let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
-            if let np = (obj["port"] as? Int) ?? (obj["port"] as? Double).map({ Int($0) }), np >= 1024 && np <= 65535 {
-                DispatchQueue.main.async { [weak self] in self?.start(port: UInt16(np)) }
-                send(fd, status: "200 OK", body: "{\"ok\":true}".data(using: .utf8)!, extraHeaders: [:])
+            if let np = (obj["port"] as? Int) ?? (obj["port"] as? Double).flatMap({ Int(exactly: $0) }), np >= 1024 && np <= 65535 {
+                DispatchQueue.main.sync { [weak self] in self?.start(port: UInt16(np)) }
+                let ok = port == UInt16(np) && isRunning
+                if ok {
+                    send(fd, status: "200 OK", body: "{\"ok\":true}".data(using: .utf8)!, extraHeaders: [:])
+                } else {
+                    send(fd, status: "409 Conflict", body: "{\"ok\":false,\"error\":\"port bind failed\"}".data(using: .utf8)!, extraHeaders: [:])
+                }
             } else {
                 send(fd, status: "400 Bad Request", body: "{\"error\":\"bad port\"}".data(using: .utf8)!, extraHeaders: [:])
             }
             return
         }
         if pathOnly == "/api/grant" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
             DispatchQueue.main.async {
                 if !AXIsProcessTrusted() { AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary) }
                 if !CGPreflightScreenCaptureAccess() { _ = CGRequestScreenCaptureAccess() }
@@ -343,6 +463,7 @@ final class MCPServer: NSObject {
             return
         }
         if pathOnly == "/api/open-settings" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
             DispatchQueue.main.async {
                 for s in ["x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
                           "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"] {
@@ -353,6 +474,7 @@ final class MCPServer: NSObject {
             return
         }
         if pathOnly == "/api/quit" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
             send(fd, status: "200 OK", body: "{\"ok\":true}".data(using: .utf8)!, extraHeaders: [:])
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApplication.shared.terminate(nil) }
             return
@@ -362,17 +484,16 @@ final class MCPServer: NSObject {
             send(fd, status: "404 Not Found", body: "{\"error\":\"not found\"}".data(using: .utf8)!, extraHeaders: [:])
             return
         }
-        if req.method == "GET" {
-            send(fd, status: "200 OK", body: "{\"ok\":true,\"server\":\"cua-mcp\"}".data(using: .utf8)!, extraHeaders: [:])
-            return
-        }
-        if req.method == "DELETE" {
-            // Client closing a session: nothing to reply, but the fd is ours to close.
-            close(fd)
+        if req.method == "GET" || req.method == "DELETE" {
+            send(fd, status: "405 Method Not Allowed", body: Data(), extraHeaders: ["Allow": "POST"])
             return
         }
         guard req.method == "POST" else {
-            send(fd, status: "405 Method Not Allowed", body: "{\"error\":\"method\"}".data(using: .utf8)!, extraHeaders: [:])
+            send(fd, status: "405 Method Not Allowed", body: "{\"error\":\"method\"}".data(using: .utf8)!, extraHeaders: ["Allow": "POST"])
+            return
+        }
+        guard isJSON else {
+            send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8))
             return
         }
         guard !body.isEmpty else {
@@ -415,40 +536,16 @@ final class MCPServer: NSObject {
             mcpLock.lock(); mcpSessions[sid] = Date(); mcpLock.unlock()
             let result: [String: Any] = [
                 "protocolVersion": "2025-06-18",
-                "serverInfo": ["name": "cua-mcp", "version": "1.0"],
-                "capabilities": ["tools": ["listChanged": false]]
-            ]
-            // Enforce protocolVersion from client if present
-            var r = result
-            if let pv = params["protocolVersion"] as? String { r["protocolVersion"] = pv }
-            return (r, sid)
-        case "notifications/initialized":
-            return ([:], incomingSession)
-        case "ping":
-            return ([:], incomingSession)
-        case "tools/list":
-            return (["tools": toolDefs()], incomingSession)
-        case "tools/call":
-            let name = params["name"] as? String ?? ""
-            let args = (params["arguments"] as? [String: Any]) ?? [:]
-            // Blocking, UI-facing work (captures, usleep-paced input) must not block the socket
-            // queue: the menubar UI polls /api/state while an agent call runs.
-            var result: [String: Any] = [:]
-            toolQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
-            return (result, incomingSession)
-        case "resources/list":
-            return (["resources": []], incomingSession)
-        case "prompts/list":
-            return (["prompts": []], incomingSession)
-        default:
-            return (nil, incomingSession)
-        }
-    }
-    func send(_ fd: Int32, status: String, body: Data, extraHeaders: [String: String] = [:], close: Bool = true) {
-        var h = "HTTP/1.1 \(status)\r\n"
-        h += "Content-Type: \(extraHeaders["Content-Type"] ?? "application/json")\r\n"
+                "serverInfo": ["name": "cua-mcp", "version": "1.1"],
+                "capabilities": ["tools": ["listChanged": false]],
+                "instructions": "Cua controls apps through leases. Workflow: list_apps -> acquire (scope app or window) -> windows/screenshot -> act -> release. Coordinates use the lease coordSpace (norm1000 by default): norm1000 is 0..1000 relative to the target window screenshot; image is pixels in the last screenshot/zoom; norm1 is 0..1; screen is absolute points for app leases only. Call screenshot before image-mode actions. Use zoom for small UI, hover to trigger hover states. Background actions never move the user's pointer or raise the target window.")\r\n"
         h += "Content-Length: \(body.count)\r\n"
         h += "Connection: close\r\n"
+        h += "X-Content-Type-Options: nosniff\r\n"
+        h += "X-Frame-Options: DENY\r\n"
+        h += "Referrer-Policy: no-referrer\r\n"
+        h += "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'\r\n"
+        h += "Cache-Control: no-store\r\n"
         for (k, v) in extraHeaders where k.lowercased() != "content-type" { h += "\(k): \(v)\r\n" }
         h += "\r\n"
         var out = h.data(using: .utf8)!
@@ -466,4 +563,3 @@ final class MCPServer: NSObject {
         if close { Darwin.close(fd) }
     }
 }
-
