@@ -41,10 +41,6 @@ final class AXIndexStore {
     func remove(sessionID: String) {
         lock.lock(); bySession.removeValue(forKey: sessionID); lock.unlock()
     }
-
-    func removeAll() {
-        lock.lock(); bySession.removeAll(); lock.unlock()
-    }
 }
 
 private func axWalk(_ el: AXUIElement, depth: Int, maxDepth: Int, limit: Int,

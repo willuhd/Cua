@@ -969,17 +969,19 @@ final class CuaEngine {
         guard let space = CoordSpace(rawValue: spaceRaw) else {
             return errorResult("BAD_ARGS", "coordSpace must be image, norm1000, norm1, or screen")
         }
-        let duration = clampInt(pInt(params, "durationMs"), 10_000, 300_000, 30_000)
+        let duration = max(0, pInt(params, "durationMs") ?? 0)
         let reason = String((pString(params, "reason") ?? "Foreground control requested").prefix(160))
         let agent = pString(params, "agentLabel") ?? "agent"
         do {
             let result = try ForegroundCoordinator.shared.request(pid: pid, wid: wid, appName: appNameForPid(pid),
                                                                   agent: agent, reason: reason,
                                                                   durationMs: duration, coordSpace: space)
-            let payload: [String: Any] = ["ok": true, "foregroundGrantId": result.sessionID,
+            var payload: [String: Any] = ["ok": true, "foregroundGrantId": result.sessionID,
                                            "acquisitionId": result.sessionID, "pid": Int(pid), "wid": Int(wid),
-                                           "app": appNameForPid(pid), "coordSpace": space.rawValue,
-                                           "expiresAt": Int(result.expiresAt.timeIntervalSince1970 * 1000)]
+                                           "app": appNameForPid(pid), "coordSpace": space.rawValue]
+            if let expiresAt = result.expiresAt {
+                payload["expiresAt"] = Int(expiresAt.timeIntervalSince1970 * 1000)
+            }
             return toolResultText(jsonText(payload), structured: payload)
         } catch ForegroundRequestError.busy {
             return globalActiveFailure().result

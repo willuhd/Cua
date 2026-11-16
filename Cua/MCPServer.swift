@@ -57,7 +57,7 @@ func toolDefs() -> [[String: Any]] {
         ["name": "drag", "description": "Left-button drag from one point to another. Background by default; supports steps, stepMs, startHoldMs, endHoldMs. Foreground requires an approved grant.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "fromX": ["type": "number"], "fromY": ["type": "number"], "toX": ["type": "number"], "toY": ["type": "number"], "from": ["type": "string"], "to": ["type": "string"], "steps": ["type": "number"], "stepMs": ["type": "number"], "startHoldMs": ["type": "number"], "endHoldMs": ["type": "number"], "bg": bgProp, "focus": focusProp, "coordSpace": coordProp], required: ["acquisitionId"])],
         ["name": "ax", "description": "Accessibility tree dump for the lease target (positional index; same walk as press). Window leases walk only that window.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "depth": ["type": "number"], "maxNodes": ["type": "number"]], required: ["acquisitionId"])],
         ["name": "press", "description": "AXPress by positional index (guard with expectRole/expectTitle). Window leases act only inside that window.", "inputSchema": obj(["pid": pidProp, "app": appProp, "acquisitionId": idProp, "wid": widProp, "index": ["type": "number"], "depth": ["type": "number"], "maxNodes": ["type": "number"], "expectRole": ["type": "string"], "expectTitle": ["type": "string"]], required: ["acquisitionId", "index"])],
-        ["name": "request_foreground", "description": "Ask the user to approve temporary foreground control of one window. This blocks up to 90s for menubar approval, revokes every background lease on approval, and returns a foreground grant id. The user sees the target, agent, reason, and duration.", "inputSchema": obj(["pid": pidProp, "app": appProp, "wid": widProp, "reason": ["type": "string"], "durationMs": ["type": "number", "description": "10s...5min (default 30s)"], "coordSpace": coordProp, "agentLabel": ["type": "string"]], required: [])],
+        ["name": "request_foreground", "description": "Ask the user to approve temporary foreground control of one window. This blocks up to 90s for menubar approval, revokes every background lease on approval, and returns a foreground grant id. The user sees the target, agent, reason, and optional duration.", "inputSchema": obj(["pid": pidProp, "app": appProp, "wid": widProp, "reason": ["type": "string"], "durationMs": ["type": "number", "description": "0/omitted = no expiry; positive = auto-release after this many milliseconds"], "coordSpace": coordProp, "agentLabel": ["type": "string"]], required: [])],
         ["name": "foreground_status", "description": "Return idle/pending/active foreground state, target, agent, and remaining time.", "inputSchema": obj([:], required: [])],
         ["name": "release_foreground", "description": "Release an active foreground grant and restore the user's pointer and focus.", "inputSchema": obj(["acquisitionId": idProp, "foregroundGrantId": ["type": "string"]], required: [])],
     ]
@@ -166,7 +166,8 @@ final class MCPServer: NSObject {
         } else {
             controlQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
         }
-        if name == "release", let id = args["acquisitionId"] as? String {
+        if name == "release" || name == "release_foreground",
+           let id = (args["acquisitionId"] as? String) ?? (args["foregroundGrantId"] as? String) {
             dropLeaseQueue(id)
         }
         return result
@@ -380,7 +381,10 @@ final class MCPServer: NSObject {
         }
         iconLock.unlock()
         let value = Self.iconBase64(pid: pid)
-        iconLock.lock(); iconCache[pid] = (value, Date()); iconLock.unlock()
+        iconLock.lock()
+        iconCache = iconCache.filter { Date().timeIntervalSince($0.value.1) < 60 }
+        iconCache[pid] = (value, Date())
+        iconLock.unlock()
         return value
     }
 
@@ -421,10 +425,8 @@ final class MCPServer: NSObject {
                 var d: [String: Any] = ["pid": Int(s.pid), "app": s.appName, "agent": s.agentLabel ?? "unknown",
                                          "id": s.id, "acquisitionId": s.id, "scope": s.scope.rawValue,
                                          "coordSpace": s.coordSpace.rawValue, "icon": iconBase64Cached(pid: s.pid)]
-                if let wid = s.wid {
-                    d["wid"] = Int(wid)
-                    if let title = windowTitle(wid: wid) { d["windowTitle"] = title }
-                }
+                if let wid = s.wid { d["wid"] = Int(wid) }
+                if let title = s.windowTitle { d["windowTitle"] = title }
                 return d
             }
             let ax = AXIsProcessTrusted(); let scr = CGPreflightScreenCaptureAccess()
@@ -446,9 +448,17 @@ final class MCPServer: NSObject {
                 let p32 = Int32(clamping: pid)
                 let w32 = wid.flatMap { $0 > 0 && $0 <= Int(UInt32.max) ? UInt32($0) : nil }
                 controlQueue.sync {
-                    let foreground = SessionStore.shared.sessions().contains { $0.pid == p32 && $0.scope == .foreground }
+                    let victims = SessionStore.shared.sessions().filter {
+                        $0.pid == p32 && (w32 == nil || $0.wid == w32)
+                    }
+                    let hadForeground = victims.contains { $0.scope == .foreground }
                     SessionStore.shared.free(pid: p32, wid: w32)
-                    if foreground { ForegroundCoordinator.shared.stop() }
+                    for s in victims {
+                        SnapshotStore.shared.remove(sessionID: s.id)
+                        AXIndexStore.shared.remove(sessionID: s.id)
+                        self.dropLeaseQueue(s.id)
+                    }
+                    if hadForeground { ForegroundCoordinator.shared.stop() }
                 }
                 onStateChange?()
             }
@@ -471,7 +481,9 @@ final class MCPServer: NSObject {
             case "deny":
                 ok = ForegroundCoordinator.shared.deny(requestId: requestId)
             case "stop":
+                let sid = ForegroundCoordinator.shared.activeSessionID
                 ForegroundCoordinator.shared.stop()
+                if let sid { dropLeaseQueue(sid) }
                 ok = true
             default:
                 break

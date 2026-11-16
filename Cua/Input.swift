@@ -32,9 +32,6 @@ func warpCursor(to p: CGPoint) {
     CGWarpMouseCursorPosition(p)
     CGAssociateMouseAndMouseCursorPosition(1)
 }
-func currentCursorPosition() -> CGPoint? {
-    CGEvent(source: nil)?.location
-}
 func postMouseMoved(pid: Int32, wid: UInt32, local: CGPoint, screen: CGPoint, bg: Bool, group: Int64) {
     guard let e = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
                           mouseCursorPosition: screen, mouseButton: .left) else { return }

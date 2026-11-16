@@ -30,8 +30,7 @@ struct Session {
     var scope: LeaseScope
     var wid: UInt32?
     var coordSpace: CoordSpace
-    var createdAt: Date
-    var lastUsedAt: Date
+    var windowTitle: String?
 }
 
 final class SessionStore {
@@ -54,7 +53,7 @@ final class SessionStore {
         let bid = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid })?.bundleIdentifier ?? "?"
         return Session(id: makeShortId(), pid: pid, agentLabel: agentLabel, appName: name, bid: bid,
                        scope: scope, wid: wid, coordSpace: coordSpace,
-                       createdAt: Date(), lastUsedAt: Date())
+                       windowTitle: wid.flatMap { windowTitle(wid: $0) })
     }
 
     func acquire(pid: Int32, scope: LeaseScope, wid: UInt32?, coordSpace: CoordSpace, agentLabel: String?) -> Result<Session, LeaseError> {
@@ -115,10 +114,7 @@ final class SessionStore {
             byId.removeValue(forKey: s.id); removeCursorsLocked(sessionID: s.id)
             return .failure(.invalidId(reason: "the pid now belongs to a different app; acquire again"))
         }
-        var updated = s
-        updated.lastUsedAt = Date()
-        byId[updated.id] = updated
-        return .success(updated)
+        return .success(s)
     }
 
     func release(id: String, pid: Int32? = nil) -> Result<Void, LeaseError> {
@@ -155,11 +151,6 @@ final class SessionStore {
         }
     }
 
-    func freeAll() {
-        lock.lock(); defer { lock.unlock() }
-        byId.removeAll()
-        cursors.removeAll()
-    }
 
     func sessions() -> [Session] {
         lock.lock(); defer { lock.unlock() }
@@ -186,10 +177,6 @@ final class SessionStore {
         return byId[id.lowercased()]
     }
 
-    func anySession(pid: Int32) -> Session? {
-        lock.lock(); defer { lock.unlock() }
-        return byId.values.first { $0.pid == pid }
-    }
 
     func saveCursor(sessionID: String, wid: UInt32, x: Double, y: Double) {
         lock.lock(); defer { lock.unlock() }

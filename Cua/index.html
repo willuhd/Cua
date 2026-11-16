@@ -247,7 +247,7 @@ function renderForeground(s){
   const box = el('div','fg');
   if (fg.mode === 'pending') {
     box.append(el('div','title','Foreground request'));
-    box.append(el('div','meta', (fg.agent || 'agent') + ' wants the real pointer on ' + (fg.app || 'a window') + (fg.durationMs ? ' for ' + Math.round(fg.durationMs / 1000) + 's' : '') + (fg.reason ? ' — ' + fg.reason : '')));
+    box.append(el('div','meta', (fg.agent || 'agent') + ' wants the real pointer on ' + (fg.app || 'a window') + (fg.durationMs ? ' for ' + Math.round(fg.durationMs / 1000) + 's' : ' until stopped') + (fg.reason ? ' — ' + fg.reason : '')));
     if (!window.__CUA_UI_TOKEN) {
       box.append(el('div','meta','Approve or deny this request in the Cua menubar popover.'));
     }
@@ -272,13 +272,18 @@ function renderForeground(s){
     if (!window.__CUA_UI_TOKEN) { stop.disabled = true; }
     actions.append(stop);
     box.append(actions);
-    const tick = () => {
-      const left = Math.max(0, Math.ceil(((fg.expiresAt || 0) - Date.now()) / 1000));
-      time.textContent = left + 's';
-    };
-    tick();
-    if (window._fgTimer) clearInterval(window._fgTimer);
-    window._fgTimer = setInterval(tick, 1000);
+    if (fg.expiresAt) {
+      const tick = () => {
+        const left = Math.max(0, Math.ceil(((fg.expiresAt || 0) - Date.now()) / 1000));
+        time.textContent = left + 's';
+      };
+      tick();
+      if (window._fgTimer) clearInterval(window._fgTimer);
+      window._fgTimer = setInterval(tick, 1000);
+    } else {
+      time.textContent = 'until stopped';
+      if (window._fgTimer) { clearInterval(window._fgTimer); window._fgTimer = null; }
+    }
   }
   F.append(box);
 }

@@ -55,10 +55,6 @@ final class SnapshotStore {
         return byKey[key(sessionID, wid)]
     }
 
-    func removeAll() {
-        lock.lock(); byKey.removeAll(); order.removeAll(); lock.unlock()
-    }
-
     func remove(sessionID: String) {
         lock.lock(); defer { lock.unlock() }
         let prefix = "\(sessionID):"
@@ -155,7 +151,7 @@ final class ForegroundCoordinator {
     static let shared = ForegroundCoordinator()
 
     final class PendingResult: @unchecked Sendable {
-        var result: Result<(sessionID: String, expiresAt: Date), ForegroundRequestError>?
+        var result: Result<(sessionID: String, expiresAt: Date?), ForegroundRequestError>?
     }
 
     struct Pending {
@@ -166,7 +162,7 @@ final class ForegroundCoordinator {
         let agent: String
         let reason: String
         let requestedAt: Date
-        let durationMs: Int
+        let durationMs: Int // 0 = no expiry
         let coordSpace: CoordSpace
         let box: PendingResult
         let semaphore: DispatchSemaphore
@@ -180,7 +176,7 @@ final class ForegroundCoordinator {
         let appName: String
         let agent: String
         let startedAt: Date
-        let expiresAt: Date
+        let expiresAt: Date?
     }
 
     private let lock = NSLock()
@@ -206,7 +202,7 @@ final class ForegroundCoordinator {
     }
 
     func request(pid: Int32, wid: UInt32, appName: String, agent: String,
-                 reason: String, durationMs: Int, coordSpace: CoordSpace) throws -> (sessionID: String, expiresAt: Date) {
+                 reason: String, durationMs: Int, coordSpace: CoordSpace) throws -> (sessionID: String, expiresAt: Date?) {
         let requestId = UUID().uuidString.prefix(8).lowercased()
         let semaphore = DispatchSemaphore(value: 0)
         let box = PendingResult()
@@ -217,7 +213,7 @@ final class ForegroundCoordinator {
         }
         let p = Pending(requestId: String(requestId), pid: pid, wid: wid, appName: appName,
                         agent: agent, reason: reason, requestedAt: Date(),
-                        durationMs: max(10_000, min(durationMs, 300_000)),
+                        durationMs: max(0, durationMs),
                         coordSpace: coordSpace, box: box, semaphore: semaphore)
         pending = p
         lock.unlock()
@@ -278,7 +274,9 @@ final class ForegroundCoordinator {
                                                             coordSpace: p.coordSpace,
                                                             agentLabel: p.agent)
         activateForeground(pid: p.pid, wid: p.wid)
-        let expiresAt = Date().addingTimeInterval(Double(p.durationMs) / 1000.0)
+        let expiresAt: Date? = p.durationMs > 0
+            ? Date().addingTimeInterval(Double(p.durationMs) / 1000.0)
+            : nil
         let a = Active(requestId: p.requestId, sessionID: session.id, pid: p.pid, wid: p.wid,
                        appName: p.appName, agent: p.agent, startedAt: Date(), expiresAt: expiresAt)
 
@@ -287,7 +285,7 @@ final class ForegroundCoordinator {
         p.box.result = .success((session.id, expiresAt))
         pending = nil
         lock.unlock()
-        scheduleExpiry(a)
+        if let expiresAt = expiresAt { scheduleExpiry(a, expiresAt: expiresAt) }
         HumanInputMonitor.shared.start()
         p.semaphore.signal()
         return nil
@@ -335,11 +333,14 @@ final class ForegroundCoordinator {
     func status() -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         if let a = active {
-            return ["mode": "active", "requestId": a.requestId, "sessionId": a.sessionID,
-                    "pid": Int(a.pid), "wid": Int(a.wid), "app": a.appName, "agent": a.agent,
-                    "startedAt": Int(a.startedAt.timeIntervalSince1970 * 1000),
-                    "expiresAt": Int(a.expiresAt.timeIntervalSince1970 * 1000),
-                    "remainingMs": max(0, Int(a.expiresAt.timeIntervalSinceNow * 1000))]
+            var d: [String: Any] = ["mode": "active", "requestId": a.requestId, "sessionId": a.sessionID,
+                                    "pid": Int(a.pid), "wid": Int(a.wid), "app": a.appName, "agent": a.agent,
+                                    "startedAt": Int(a.startedAt.timeIntervalSince1970 * 1000)]
+            if let expiresAt = a.expiresAt {
+                d["expiresAt"] = Int(expiresAt.timeIntervalSince1970 * 1000)
+                d["remainingMs"] = max(0, Int(expiresAt.timeIntervalSinceNow * 1000))
+            }
+            return d
         }
         if let p = pending {
             return ["mode": "pending", "requestId": p.requestId, "pid": Int(p.pid), "wid": Int(p.wid),
@@ -350,14 +351,14 @@ final class ForegroundCoordinator {
         return ["mode": "idle"]
     }
 
-    private func scheduleExpiry(_ a: Active) {
+    private func scheduleExpiry(_ a: Active, expiresAt: Date) {
         let item = DispatchWorkItem { [weak self] in
             self?.lock.lock()
             if self?.active?.sessionID == a.sessionID { self?.lock.unlock(); self?.stop() }
             else { self?.lock.unlock() }
         }
         lock.lock(); expiry = item; lock.unlock()
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + Double(max(1, Int(a.expiresAt.timeIntervalSinceNow))), execute: item)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + Double(max(1, Int(expiresAt.timeIntervalSinceNow))), execute: item)
     }
 
     private func activateForeground(pid: Int32, wid: UInt32) {
@@ -366,7 +367,14 @@ final class ForegroundCoordinator {
         }
         if Thread.isMainThread { activate() } else { DispatchQueue.main.sync(execute: activate) }
         _ = raiseWindow(pid: pid, wid: wid)
-        usleep(150_000)
+        // Activation is asynchronous. Wait for the target app to become active,
+        // then give the window server a short moment to raise the leased window.
+        let deadline = Date().addingTimeInterval(0.5)
+        while Date() < deadline {
+            if NSRunningApplication(processIdentifier: pid)?.isActive == true { break }
+            usleep(20_000)
+        }
+        usleep(40_000)
     }
 
     private func restoreForeground(prev: FocusSnapshot?, targetWid: UInt32, cursor: CGPoint?) {
