@@ -115,12 +115,11 @@ final class CuaEngine {
         guard let id = pString(params, "acquisitionId"), !id.isEmpty else {
             return .failure(ToolFailure(result: invalidIdResult("missing acquisitionId — call acquire first")))
         }
-        let pid = resolvePid(params: params)
         if let active = ForegroundCoordinator.shared.activeSessionID,
            id.lowercased() != active.lowercased() {
             return .failure(globalActiveFailure())
         }
-        switch SessionStore.shared.validate(id: id, pid: pid) {
+        switch SessionStore.shared.validate(id: id) {
         case .success(let s):
             if ForegroundCoordinator.shared.activeSessionID == nil && s.scope == .foreground {
                 return .failure(ToolFailure(result: invalidIdResult("foreground grant is no longer active")))
@@ -352,14 +351,14 @@ final class CuaEngine {
                 d["held"] = true
                 d["scope"] = h.scope.rawValue
                 d["acquisitionId"] = h.id
-                d["agent"] = h.agentLabel ?? "unknown"
+                d["agent"] = h.agent ?? "unknown"
                 if let wid = h.wid { d["wid"] = Int(wid) }
             } else { d["held"] = false }
             return d
         }
         let sessionPayload = sessions.map { s -> [String: Any] in
             var d: [String: Any] = ["pid": Int(s.pid), "app": s.appName, "bid": s.bid,
-                                     "scope": s.scope.rawValue, "agent": s.agentLabel ?? "unknown",
+                                     "scope": s.scope.rawValue, "agent": s.agent ?? "unknown",
                                      "acquisitionId": s.id, "id": s.id,
                                      "coordSpace": s.coordSpace.rawValue]
             if let wid = s.wid {
@@ -417,8 +416,8 @@ final class CuaEngine {
             }
             wid = requested
         }
-        let label = pString(params, "agentLabel") ?? pString(params, "agent")
-        switch SessionStore.shared.acquire(pid: pid, scope: scope, wid: wid, coordSpace: space, agentLabel: label) {
+        let agent = pString(params, "agent") ?? "agent"
+        switch SessionStore.shared.acquire(pid: pid, scope: scope, wid: wid, coordSpace: space, agent: agent) {
         case .success(let s):
             var payload: [String: Any] = ["acquisitionId": s.id, "pid": Int(s.pid), "app": s.appName,
                                            "scope": s.scope.rawValue, "coordSpace": s.coordSpace.rawValue]
@@ -436,12 +435,8 @@ final class CuaEngine {
         guard let id = pString(params, "acquisitionId"), !id.isEmpty else {
             return invalidIdResult("missing acquisitionId")
         }
-        let pid = resolvePid(params: params)
         guard let session = SessionStore.shared.find(id: id) else {
             return invalidIdResult("no active lease with this acquisitionId")
-        }
-        if let pid = pid, session.pid != pid {
-            return invalidIdResult("lease belongs to pid \(session.pid), not \(pid)")
         }
         if session.scope == .foreground {
             _ = ForegroundCoordinator.shared.release(sessionID: session.id)
@@ -911,15 +906,21 @@ final class CuaEngine {
         let depth = clampInt(pInt(params, "depth"), 1, 64, 8)
         let limit = clampInt(pInt(params, "maxNodes"), 1, 20_000, 4000)
         let pid: Int32
-        if s.scope == .foreground {
-            guard let p = resolvePid(params: params) else {
-                return errorResult("NO_TARGET", "foreground AX needs pid or app")
-            }
-            pid = p
-        } else { pid = s.pid }
         var wid: UInt32? = nil
-        if s.scope == .window { wid = s.wid }
-        else if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
+        if s.scope == .window {
+            pid = s.pid
+            wid = s.wid
+        } else if s.scope == .foreground {
+            guard let requested = pUInt32(params, "wid"), requested != 0,
+                  let owner = windowOwnerPid(wid: requested) else {
+                return errorResult("NO_TARGET", "foreground AX needs a window id")
+            }
+            pid = owner
+            wid = requested
+        } else {
+            pid = s.pid
+            if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
+        }
         guard let text = axDump(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit) else {
             return errorResult("AX_UNAVAILABLE", "could not read the accessibility tree",
                                extra: ["hint": "Grant Accessibility to Cua and make sure the window still exists."])
@@ -938,15 +939,21 @@ final class CuaEngine {
         let depth = clampInt(pInt(params, "depth"), 1, 64, 8)
         let limit = clampInt(pInt(params, "maxNodes"), 1, 20_000, 4000)
         let pid: Int32
-        if s.scope == .foreground {
-            guard let p = resolvePid(params: params) else {
-                return errorResult("NO_TARGET", "foreground AX needs pid or app")
-            }
-            pid = p
-        } else { pid = s.pid }
         var wid: UInt32? = nil
-        if s.scope == .window { wid = s.wid }
-        else if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
+        if s.scope == .window {
+            pid = s.pid
+            wid = s.wid
+        } else if s.scope == .foreground {
+            guard let requested = pUInt32(params, "wid"), requested != 0,
+                  let owner = windowOwnerPid(wid: requested) else {
+                return errorResult("NO_TARGET", "foreground AX needs a window id")
+            }
+            pid = owner
+            wid = requested
+        } else {
+            pid = s.pid
+            if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
+        }
         guard AXIndexStore.shared.build(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit),
               let (nodes, _) = AXIndexStore.shared.nodes(sessionID: s.id) else {
             return errorResult("AX_UNAVAILABLE", "could not build the accessibility tree")
@@ -976,7 +983,7 @@ final class CuaEngine {
             return errorResult("BAD_ARGS", "coordSpace must be image, norm1000, norm1, or screen")
         }
         let reason = String((pString(params, "reason") ?? "Full control requested").prefix(160))
-        let agent = pString(params, "agentLabel") ?? "agent"
+        let agent = pString(params, "agent") ?? "agent"
         do {
             let grant = try ForegroundCoordinator.shared.request(agent: agent, reason: reason,
                                                                   coordSpace: space)
@@ -1002,16 +1009,6 @@ final class CuaEngine {
         return toolResultText(jsonText(payload), structured: payload)
     }
 
-    func toolReleaseForeground(params: [String: Any]) -> [String: Any] {
-        guard let id = pString(params, "acquisitionId") ?? pString(params, "foregroundGrantId") else {
-            return invalidIdResult("missing foreground grant id")
-        }
-        if ForegroundCoordinator.shared.release(sessionID: id) {
-            return toolResultText("{\"ok\":true}")
-        }
-        return invalidIdResult("foreground grant is not active")
-    }
-
     func dispatch(tool: String, params: [String: Any]) -> [String: Any] {
         switch tool {
         case "list_apps": return toolListApps()
@@ -1031,7 +1028,6 @@ final class CuaEngine {
         case "press": return toolPress(params: params)
         case "request_foreground": return toolRequestForeground(params: params)
         case "foreground_status": return toolForegroundStatus(params: params)
-        case "release_foreground": return toolReleaseForeground(params: params)
         default: return errorResult("NO_SUCH_TOOL", "tool \(tool) does not exist")
         }
     }

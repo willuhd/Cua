@@ -24,7 +24,7 @@ enum CoordSpace: String {
 struct Session {
     var id: String
     var pid: Int32
-    var agentLabel: String?
+    var agent: String?
     var appName: String
     var bid: String
     var scope: LeaseScope
@@ -48,15 +48,15 @@ final class SessionStore {
 
     func makeShortId() -> String { String(UUID().uuidString.prefix(8).lowercased()) }
 
-    private func newSession(pid: Int32, scope: LeaseScope, wid: UInt32?, coordSpace: CoordSpace, agentLabel: String?) -> Session {
+    private func newSession(pid: Int32, scope: LeaseScope, wid: UInt32?, coordSpace: CoordSpace, agent: String?) -> Session {
         let name = pid == 0 ? "This Mac" : appNameForPid(pid)
         let bid = pid == 0 ? "?" : (NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid })?.bundleIdentifier ?? "?")
-        return Session(id: makeShortId(), pid: pid, agentLabel: agentLabel, appName: name, bid: bid,
+        return Session(id: makeShortId(), pid: pid, agent: agent, appName: name, bid: bid,
                        scope: scope, wid: wid, coordSpace: coordSpace,
                        windowTitle: wid.flatMap { windowTitle(wid: $0) })
     }
 
-    func acquire(pid: Int32, scope: LeaseScope, wid: UInt32?, coordSpace: CoordSpace, agentLabel: String?) -> Result<Session, LeaseError> {
+    func acquire(pid: Int32, scope: LeaseScope, wid: UInt32?, coordSpace: CoordSpace, agent: String?) -> Result<Session, LeaseError> {
         lock.lock(); defer { lock.unlock() }
         let existing = byId.values.filter { $0.pid == pid }
         switch scope {
@@ -73,7 +73,7 @@ final class SessionStore {
         case .foreground:
             return .failure(.badRequest("foreground grants are created through request_foreground"))
         }
-        let s = newSession(pid: pid, scope: scope, wid: (scope == .app ? nil : wid), coordSpace: coordSpace, agentLabel: agentLabel)
+        let s = newSession(pid: pid, scope: scope, wid: (scope == .app ? nil : wid), coordSpace: coordSpace, agent: agent)
         byId[s.id] = s
         return .success(s)
     }
@@ -81,11 +81,11 @@ final class SessionStore {
     /// Foreground is a global, hard preemption: every existing background
     /// lease is revoked before the foreground session is created. The caller
     /// must have user approval and the global input lock already held.
-    func acquireForeground(coordSpace: CoordSpace, agentLabel: String?) -> Session {
+    func acquireForeground(coordSpace: CoordSpace, agent: String?) -> Session {
         lock.lock(); defer { lock.unlock() }
         byId.removeAll()
         cursors.removeAll()
-        let s = newSession(pid: 0, scope: .foreground, wid: nil, coordSpace: coordSpace, agentLabel: agentLabel)
+        let s = newSession(pid: 0, scope: .foreground, wid: nil, coordSpace: coordSpace, agent: agent)
         byId[s.id] = s
         return s
     }
@@ -98,15 +98,12 @@ final class SessionStore {
         NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid })?.bundleIdentifier
     }
 
-    func validate(id: String, pid: Int32? = nil) -> Result<Session, LeaseError> {
+    func validate(id: String) -> Result<Session, LeaseError> {
         lock.lock(); defer { lock.unlock() }
         guard let s = byId[id.lowercased()] else {
             return .failure(.invalidId(reason: "no active lease with this acquisitionId"))
         }
         if s.scope == .foreground { return .success(s) }
-        if let pid = pid, s.pid != pid {
-            return .failure(.invalidId(reason: "lease belongs to pid \(s.pid), not \(pid)"))
-        }
         if !pidAlive(s.pid) {
             byId.removeValue(forKey: s.id); removeCursorsLocked(sessionID: s.id)
             return .failure(.invalidId(reason: "the target app exited; acquire again"))
@@ -118,13 +115,10 @@ final class SessionStore {
         return .success(s)
     }
 
-    func release(id: String, pid: Int32? = nil) -> Result<Void, LeaseError> {
+    func release(id: String) -> Result<Void, LeaseError> {
         lock.lock(); defer { lock.unlock() }
         guard let s = byId[id.lowercased()] else {
             return .failure(.invalidId(reason: "no active lease with this acquisitionId"))
-        }
-        if let pid = pid, s.pid != pid {
-            return .failure(.invalidId(reason: "lease belongs to pid \(s.pid), not \(pid)"))
         }
         byId.removeValue(forKey: s.id)
         removeCursorsLocked(sessionID: s.id)

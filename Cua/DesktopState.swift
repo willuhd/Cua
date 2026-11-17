@@ -246,7 +246,7 @@ final class ForegroundCoordinator {
             return .busy
         }
         let session = SessionStore.shared.acquireForeground(coordSpace: p.coordSpace,
-                                                            agentLabel: p.agent)
+                                                            agent: p.agent)
         let a = Active(requestId: p.requestId, sessionID: session.id,
                        agent: p.agent, startedAt: Date())
 
