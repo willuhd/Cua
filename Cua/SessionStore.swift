@@ -49,8 +49,8 @@ final class SessionStore {
     func makeShortId() -> String { String(UUID().uuidString.prefix(8).lowercased()) }
 
     private func newSession(pid: Int32, scope: LeaseScope, wid: UInt32?, coordSpace: CoordSpace, agentLabel: String?) -> Session {
-        let name = appNameForPid(pid)
-        let bid = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid })?.bundleIdentifier ?? "?"
+        let name = pid == 0 ? "This Mac" : appNameForPid(pid)
+        let bid = pid == 0 ? "?" : (NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid })?.bundleIdentifier ?? "?")
         return Session(id: makeShortId(), pid: pid, agentLabel: agentLabel, appName: name, bid: bid,
                        scope: scope, wid: wid, coordSpace: coordSpace,
                        windowTitle: wid.flatMap { windowTitle(wid: $0) })
@@ -71,21 +71,21 @@ final class SessionStore {
                 return .failure(.held(held))
             }
         case .foreground:
-            if let held = existing.first { return .failure(.held(held)) }
+            return .failure(.badRequest("foreground grants are created through request_foreground"))
         }
         let s = newSession(pid: pid, scope: scope, wid: (scope == .app ? nil : wid), coordSpace: coordSpace, agentLabel: agentLabel)
         byId[s.id] = s
         return .success(s)
     }
 
-    /// Foreground is a hard preemption: every existing background lease is
-    /// revoked before the foreground session is created. The caller must have
-    /// user approval and the global input lock already held.
-    func acquireForeground(pid: Int32, wid: UInt32, coordSpace: CoordSpace, agentLabel: String?) -> Session {
+    /// Foreground is a global, hard preemption: every existing background
+    /// lease is revoked before the foreground session is created. The caller
+    /// must have user approval and the global input lock already held.
+    func acquireForeground(coordSpace: CoordSpace, agentLabel: String?) -> Session {
         lock.lock(); defer { lock.unlock() }
         byId.removeAll()
         cursors.removeAll()
-        let s = newSession(pid: pid, scope: .foreground, wid: wid, coordSpace: coordSpace, agentLabel: agentLabel)
+        let s = newSession(pid: 0, scope: .foreground, wid: nil, coordSpace: coordSpace, agentLabel: agentLabel)
         byId[s.id] = s
         return s
     }
@@ -103,6 +103,7 @@ final class SessionStore {
         guard let s = byId[id.lowercased()] else {
             return .failure(.invalidId(reason: "no active lease with this acquisitionId"))
         }
+        if s.scope == .foreground { return .success(s) }
         if let pid = pid, s.pid != pid {
             return .failure(.invalidId(reason: "lease belongs to pid \(s.pid), not \(pid)"))
         }
@@ -157,6 +158,10 @@ final class SessionStore {
         var live: [Session] = []
         let all = Array(byId.values)
         for s in all {
+            if s.scope == .foreground {
+                live.append(s)
+                continue
+            }
             if !pidAlive(s.pid) {
                 byId.removeValue(forKey: s.id); removeCursorsLocked(sessionID: s.id); continue
             }

@@ -143,7 +143,6 @@ enum ForegroundRequestError: Error {
     case busy
     case denied
     case timeout
-    case targetGone
     case notActive
 }
 
@@ -156,9 +155,6 @@ final class ForegroundCoordinator {
 
     struct Pending {
         let requestId: String
-        let pid: Int32
-        let wid: UInt32
-        let appName: String
         let agent: String
         let reason: String
         let requestedAt: Date
@@ -171,20 +167,21 @@ final class ForegroundCoordinator {
     struct Active {
         let requestId: String
         let sessionID: String
-        let pid: Int32
-        let wid: UInt32
-        let appName: String
         let agent: String
         let startedAt: Date
         let expiresAt: Date?
+    }
+
+    struct HumanAbort {
+        let sessionID: String
+        let at: Date
     }
 
     private let lock = NSLock()
     private var pending: Pending?
     private var active: Active?
     private var expiry: DispatchWorkItem?
-    private var previousFocus: FocusSnapshot?
-    private var previousCursor: CGPoint?
+    private var humanAbort: HumanAbort?
 
     var isActive: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -201,8 +198,8 @@ final class ForegroundCoordinator {
         return active?.startedAt
     }
 
-    func request(pid: Int32, wid: UInt32, appName: String, agent: String,
-                 reason: String, durationMs: Int, coordSpace: CoordSpace) throws -> (sessionID: String, expiresAt: Date?) {
+    func request(agent: String, reason: String, durationMs: Int,
+                 coordSpace: CoordSpace) throws -> (sessionID: String, expiresAt: Date?) {
         let requestId = UUID().uuidString.prefix(8).lowercased()
         let semaphore = DispatchSemaphore(value: 0)
         let box = PendingResult()
@@ -211,9 +208,9 @@ final class ForegroundCoordinator {
             lock.unlock()
             throw ForegroundRequestError.busy
         }
-        let p = Pending(requestId: String(requestId), pid: pid, wid: wid, appName: appName,
-                        agent: agent, reason: reason, requestedAt: Date(),
-                        durationMs: max(0, durationMs),
+        humanAbort = nil
+        let p = Pending(requestId: String(requestId), agent: agent, reason: reason,
+                        requestedAt: Date(), durationMs: max(0, durationMs),
                         coordSpace: coordSpace, box: box, semaphore: semaphore)
         pending = p
         lock.unlock()
@@ -253,32 +250,21 @@ final class ForegroundCoordinator {
         }
         lock.unlock()
 
-        guard windowOwnerPid(wid: p.wid) == p.pid else {
-            p.box.result = .failure(.targetGone)
-            p.semaphore.signal()
-            lock.lock(); if pending?.requestId == p.requestId { pending = nil }; lock.unlock()
-            return .targetGone
-        }
-
-        // One-click hard preemption: wait for the current input gesture, then
-        // revoke every background lease and create the foreground session.
+        // Hard preemption: wait for the current input gesture, then revoke
+        // every background lease and create the one global foreground lease.
         guard InputGate.shared.wait(timeout: 5) else {
             p.box.result = .failure(.busy)
             p.semaphore.signal()
             lock.lock(); if pending?.requestId == p.requestId { pending = nil }; lock.unlock()
             return .busy
         }
-        previousFocus = snapshotFocus(readKeyWindow: true)
-        previousCursor = CGEvent(source: nil)?.location
-        let session = SessionStore.shared.acquireForeground(pid: p.pid, wid: p.wid,
-                                                            coordSpace: p.coordSpace,
+        let session = SessionStore.shared.acquireForeground(coordSpace: p.coordSpace,
                                                             agentLabel: p.agent)
-        activateForeground(pid: p.pid, wid: p.wid)
         let expiresAt: Date? = p.durationMs > 0
             ? Date().addingTimeInterval(Double(p.durationMs) / 1000.0)
             : nil
-        let a = Active(requestId: p.requestId, sessionID: session.id, pid: p.pid, wid: p.wid,
-                       appName: p.appName, agent: p.agent, startedAt: Date(), expiresAt: expiresAt)
+        let a = Active(requestId: p.requestId, sessionID: session.id,
+                       agent: p.agent, startedAt: Date(), expiresAt: expiresAt)
 
         lock.lock()
         active = a
@@ -301,26 +287,38 @@ final class ForegroundCoordinator {
         return true
     }
 
-    func stop(restore: Bool = true) {
+    func stop() {
         HumanInputMonitor.shared.stop()
         lock.lock()
         guard let a = active else { lock.unlock(); return }
         active = nil
         expiry?.cancel()
         expiry = nil
-        let prev = previousFocus
-        let prevCursor = previousCursor
-        previousFocus = nil
-        previousCursor = nil
         lock.unlock()
-        SessionStore.shared.remove(id: a.sessionID)
-        SnapshotStore.shared.remove(sessionID: a.sessionID)
-        AXIndexStore.shared.remove(sessionID: a.sessionID)
-        if restore { restoreForeground(prev: prev, targetWid: a.wid, cursor: prevCursor) }
+        teardown(a)
     }
 
-    /// Human input already took the pointer/focus; never yank it back.
-    func abortForHuman() { stop(restore: false) }
+    /// Human input took the pointer. Keep a short-lived revocation record so
+    /// the agent's next call can get a fresh screenshot instead of a generic
+    /// invalid-id error.
+    func abortForHuman() {
+        HumanInputMonitor.shared.stop()
+        lock.lock()
+        guard let a = active else { lock.unlock(); return }
+        active = nil
+        expiry?.cancel()
+        expiry = nil
+        humanAbort = HumanAbort(sessionID: a.sessionID, at: Date())
+        lock.unlock()
+        teardown(a)
+    }
+
+    func takeHumanAbort(sessionID: String) -> HumanAbort? {
+        lock.lock(); defer { lock.unlock() }
+        guard let h = humanAbort, h.sessionID.lowercased() == sessionID.lowercased() else { return nil }
+        humanAbort = nil
+        return h
+    }
 
     func release(sessionID: String) -> Bool {
         lock.lock()
@@ -333,8 +331,9 @@ final class ForegroundCoordinator {
     func status() -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         if let a = active {
-            var d: [String: Any] = ["mode": "active", "requestId": a.requestId, "sessionId": a.sessionID,
-                                    "pid": Int(a.pid), "wid": Int(a.wid), "app": a.appName, "agent": a.agent,
+            var d: [String: Any] = ["mode": "active", "requestId": a.requestId,
+                                    "sessionId": a.sessionID, "agent": a.agent,
+                                    "app": "This Mac",
                                     "startedAt": Int(a.startedAt.timeIntervalSince1970 * 1000)]
             if let expiresAt = a.expiresAt {
                 d["expiresAt"] = Int(expiresAt.timeIntervalSince1970 * 1000)
@@ -343,12 +342,18 @@ final class ForegroundCoordinator {
             return d
         }
         if let p = pending {
-            return ["mode": "pending", "requestId": p.requestId, "pid": Int(p.pid), "wid": Int(p.wid),
-                    "app": p.appName, "agent": p.agent, "reason": p.reason,
+            return ["mode": "pending", "requestId": p.requestId, "agent": p.agent,
+                    "reason": p.reason, "app": "This Mac",
                     "requestedAt": Int(p.requestedAt.timeIntervalSince1970 * 1000),
                     "durationMs": p.durationMs]
         }
         return ["mode": "idle"]
+    }
+
+    private func teardown(_ a: Active) {
+        SessionStore.shared.remove(id: a.sessionID)
+        SnapshotStore.shared.remove(sessionID: a.sessionID)
+        AXIndexStore.shared.remove(sessionID: a.sessionID)
     }
 
     private func scheduleExpiry(_ a: Active, expiresAt: Date) {
@@ -359,30 +364,5 @@ final class ForegroundCoordinator {
         }
         lock.lock(); expiry = item; lock.unlock()
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + Double(max(1, Int(expiresAt.timeIntervalSinceNow))), execute: item)
-    }
-
-    private func activateForeground(pid: Int32, wid: UInt32) {
-        let activate: () -> Void = {
-            _ = NSRunningApplication(processIdentifier: pid)?.activate(options: [])
-        }
-        if Thread.isMainThread { activate() } else { DispatchQueue.main.sync(execute: activate) }
-        _ = raiseWindow(pid: pid, wid: wid)
-        // Activation is asynchronous. Wait for the target app to become active,
-        // then give the window server a short moment to raise the leased window.
-        let deadline = Date().addingTimeInterval(0.5)
-        while Date() < deadline {
-            if NSRunningApplication(processIdentifier: pid)?.isActive == true { break }
-            usleep(20_000)
-        }
-        usleep(40_000)
-    }
-
-    private func restoreForeground(prev: FocusSnapshot?, targetWid: UInt32, cursor: CGPoint?) {
-        if let cursor = cursor {
-            CGWarpMouseCursorPosition(cursor)
-        }
-        if let prev = prev {
-            _ = restoreFocus(to: prev, targetWid: targetWid)
-        }
     }
 }

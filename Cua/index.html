@@ -246,8 +246,8 @@ function renderForeground(s){
   }
   const box = el('div','fg');
   if (fg.mode === 'pending') {
-    box.append(el('div','title','Foreground request'));
-    box.append(el('div','meta', (fg.agent || 'agent') + ' wants the real pointer on ' + (fg.app || 'a window') + (fg.durationMs ? ' for ' + Math.round(fg.durationMs / 1000) + 's' : ' until stopped') + (fg.reason ? ' — ' + fg.reason : '')));
+    box.append(el('div','title','Full Mac control request'));
+    box.append(el('div','meta', (fg.agent || 'agent') + ' wants full control of this Mac' + (fg.durationMs ? ' for ' + Math.round(fg.durationMs / 1000) + 's' : ' until stopped') + (fg.reason ? ' — ' + fg.reason : '')));
     if (!window.__CUA_UI_TOKEN) {
       box.append(el('div','meta','Approve or deny this request in the Cua menubar popover.'));
     }
@@ -260,10 +260,10 @@ function renderForeground(s){
     actions.append(allow, deny);
     box.append(actions);
   } else if (fg.mode === 'active') {
-    box.append(el('div','title','Foreground: ' + (fg.agent || 'agent')));
+    box.append(el('div','title','Full Mac control: ' + (fg.agent || 'agent')));
     const meta = el('div','meta');
     const time = el('span','mono', '');
-    meta.append(document.createTextNode((fg.app || 'window') + ' · '), time);
+    meta.append(document.createTextNode((fg.app || 'This Mac') + ' · '), time);
     box.append(meta);
     if (!window.__CUA_UI_TOKEN) box.append(el('div','meta','Stop this grant in the Cua menubar popover.'));
     const actions = el('div','actions');

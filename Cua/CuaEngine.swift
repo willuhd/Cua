@@ -101,6 +101,29 @@ final class CuaEngine {
         }
     }
 
+    private func humanAbortResult(at: Date) -> [String: Any] {
+        let structured: [String: Any] = [
+            "code": "FOREGROUND_REVOKED_BY_HUMAN",
+            "message": "the user took over; foreground access ended",
+            "retryable": false,
+            "suggested": "request_foreground again or use a background lease",
+            "revokedAt": Int(at.timeIntervalSince1970 * 1000)
+        ]
+        if let image = captureScreenImage(), let data = pngData(from: image) {
+            var result = toolResultImage(
+                png: data,
+                caption: "Foreground access ended because the user took over. Current screen attached; re-observe before acting.",
+                structured: structured)
+            result["isError"] = true
+            return result
+        }
+        return errorResult("FOREGROUND_REVOKED_BY_HUMAN",
+                           "the user took over; foreground access ended",
+                           extra: ["retryable": false,
+                                   "suggested": "request_foreground again or use a background lease",
+                                   "revokedAt": Int(at.timeIntervalSince1970 * 1000)])
+    }
+
     func requireLease(params: [String: Any]) -> Result<Session, ToolFailure> {
         guard let id = pString(params, "acquisitionId"), !id.isEmpty else {
             return .failure(ToolFailure(result: invalidIdResult("missing acquisitionId — call acquire first")))
@@ -117,6 +140,10 @@ final class CuaEngine {
             }
             return .success(s)
         case .failure(let e):
+            if case .invalidId = e,
+               let abort = ForegroundCoordinator.shared.takeHumanAbort(sessionID: id) {
+                return .failure(ToolFailure(result: humanAbortResult(at: abort.at)))
+            }
             return .failure(ToolFailure(result: leaseErrorResult(e)))
         }
     }
@@ -129,6 +156,19 @@ final class CuaEngine {
 
     func resolveTarget(_ s: Session, _ params: [String: Any], allowScreen: Bool) -> Result<Target, ToolFailure> {
         let requested = pUInt32(params, "wid")
+        if s.scope == .foreground {
+            if let requested = requested, requested != 0 {
+                guard let b = windowBounds(wid: requested) else {
+                    return .failure(failure("WINDOW_GONE", "window \(requested) is no longer available"))
+                }
+                return .success(Target(wid: requested, bounds: b, isScreen: false))
+            }
+            let b = CGDisplayBounds(CGMainDisplayID())
+            guard b.width > 0, b.height > 0 else {
+                return .failure(failure("NO_DISPLAY", "no active display"))
+            }
+            return .success(Target(wid: 0, bounds: b, isScreen: true))
+        }
         if s.scope != .app {
             guard let leased = s.wid else { return .failure(failure("NO_WINDOW", "lease has no window")) }
             if let requested = requested, requested != leased {
@@ -401,7 +441,7 @@ final class CuaEngine {
                                            "scope": s.scope.rawValue, "coordSpace": s.coordSpace.rawValue]
             if let wid = s.wid {
                 payload["wid"] = Int(wid)
-                if let title = windowTitle(wid: wid) { payload["windowTitle"] = title }
+                if let title = s.windowTitle { payload["windowTitle"] = title }
             }
             return toolResultText(jsonText(payload), structured: payload)
         case .failure(let e):
@@ -696,9 +736,9 @@ final class CuaEngine {
                                          mouseCursorPosition: mapped.screen, mouseButton: button),
                       let up = CGEvent(mouseEventSource: nil, mouseType: upType,
                                        mouseCursorPosition: mapped.screen, mouseButton: button) else { continue }
-                routeMouse(down, wid: target.wid, pid: s.pid, local: local, clickState: Int64(i + 1), group: group)
-                routeMouse(up, wid: target.wid, pid: s.pid, local: local, clickState: Int64(i + 1), group: group)
                 if bg {
+                    routeMouse(down, wid: target.wid, pid: s.pid, local: local, clickState: Int64(i + 1), group: group)
+                    routeMouse(up, wid: target.wid, pid: s.pid, local: local, clickState: Int64(i + 1), group: group)
                     postToPid(down, pid: s.pid); usleep(30_000); postToPid(up, pid: s.pid)
                 } else {
                     down.post(tap: .cghidEventTap); usleep(30_000); up.post(tap: .cghidEventTap)
@@ -811,8 +851,12 @@ final class CuaEngine {
             guard let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
                                   wheel1: dy, wheel2: dx, wheel3: 0) else { return }
             e.location = mapped.screen
-            routeMouse(e, wid: target.wid, pid: s.pid, local: local, clickState: 0, group: 0)
-            if bg { postToPid(e, pid: s.pid) } else { e.post(tap: .cghidEventTap) }
+            if bg {
+                routeMouse(e, wid: target.wid, pid: s.pid, local: local, clickState: 0, group: 0)
+                postToPid(e, pid: s.pid)
+            } else {
+                e.post(tap: .cghidEventTap)
+            }
         }
         if foreground { warpCursor(to: mapped.screen); work() }
         else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work) }
@@ -872,9 +916,11 @@ final class CuaEngine {
         let group = Int64(Date().timeIntervalSince1970 * 1000) % 100000
 
         func event(_ type: CGEventType, _ p: CGPoint) -> CGEvent? {
-            let local = CGPoint(x: p.x - target.bounds.minX, y: p.y - target.bounds.minY)
             guard let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left) else { return nil }
-            routeMouse(e, wid: target.wid, pid: s.pid, local: local, clickState: 1, group: group)
+            if bg {
+                let local = CGPoint(x: p.x - target.bounds.minX, y: p.y - target.bounds.minY)
+                routeMouse(e, wid: target.wid, pid: s.pid, local: local, clickState: 1, group: group)
+            }
             return e
         }
         func send(_ e: CGEvent) {
@@ -914,10 +960,17 @@ final class CuaEngine {
         }
         let depth = clampInt(pInt(params, "depth"), 1, 64, 8)
         let limit = clampInt(pInt(params, "maxNodes"), 1, 20_000, 4000)
+        let pid: Int32
+        if s.scope == .foreground {
+            guard let p = resolvePid(params: params) else {
+                return errorResult("NO_TARGET", "foreground AX needs pid or app")
+            }
+            pid = p
+        } else { pid = s.pid }
         var wid: UInt32? = nil
-        if s.scope != .app { wid = s.wid }
+        if s.scope == .window { wid = s.wid }
         else if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
-        guard let text = axDump(sessionID: s.id, pid: s.pid, wid: wid, maxDepth: depth, limit: limit) else {
+        guard let text = axDump(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit) else {
             return errorResult("AX_UNAVAILABLE", "could not read the accessibility tree",
                                extra: ["hint": "Grant Accessibility to Cua and make sure the window still exists."])
         }
@@ -933,10 +986,17 @@ final class CuaEngine {
         guard let idx = pInt(params, "index") else { return errorResult("BAD_ARGS", "pass index") }
         let depth = clampInt(pInt(params, "depth"), 1, 64, 8)
         let limit = clampInt(pInt(params, "maxNodes"), 1, 20_000, 4000)
+        let pid: Int32
+        if s.scope == .foreground {
+            guard let p = resolvePid(params: params) else {
+                return errorResult("NO_TARGET", "foreground AX needs pid or app")
+            }
+            pid = p
+        } else { pid = s.pid }
         var wid: UInt32? = nil
-        if s.scope != .app { wid = s.wid }
+        if s.scope == .window { wid = s.wid }
         else if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
-        guard AXIndexStore.shared.build(sessionID: s.id, pid: s.pid, wid: wid, maxDepth: depth, limit: limit),
+        guard AXIndexStore.shared.build(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit),
               let (nodes, _) = AXIndexStore.shared.nodes(sessionID: s.id) else {
             return errorResult("AX_UNAVAILABLE", "could not build the accessibility tree")
         }
@@ -957,28 +1017,22 @@ final class CuaEngine {
     }
 
     func toolRequestForeground(params: [String: Any]) -> [String: Any] {
-        guard let pid = resolvePid(params: params) else { return errorResult("NO_TARGET", "pass pid or app") }
         if ForegroundCoordinator.shared.isActive {
             return globalActiveFailure().result
         }
-        let wid = pUInt32(params, "wid") ?? defaultWid(pid: pid) ?? 0
-        guard wid != 0, windowOwnerPid(wid: wid) == pid else {
-            return errorResult("NO_WINDOW", "foreground needs a target window owned by this pid")
-        }
-        let spaceRaw = pString(params, "coordSpace") ?? CoordSpace.norm1000.rawValue
+        let spaceRaw = pString(params, "coordSpace") ?? CoordSpace.screen.rawValue
         guard let space = CoordSpace(rawValue: spaceRaw) else {
             return errorResult("BAD_ARGS", "coordSpace must be image, norm1000, norm1, or screen")
         }
         let duration = max(0, pInt(params, "durationMs") ?? 0)
-        let reason = String((pString(params, "reason") ?? "Foreground control requested").prefix(160))
+        let reason = String((pString(params, "reason") ?? "Full control requested").prefix(160))
         let agent = pString(params, "agentLabel") ?? "agent"
         do {
-            let result = try ForegroundCoordinator.shared.request(pid: pid, wid: wid, appName: appNameForPid(pid),
-                                                                  agent: agent, reason: reason,
-                                                                  durationMs: duration, coordSpace: space)
+            let result = try ForegroundCoordinator.shared.request(agent: agent, reason: reason,
+                                                                   durationMs: duration, coordSpace: space)
             var payload: [String: Any] = ["ok": true, "foregroundGrantId": result.sessionID,
-                                           "acquisitionId": result.sessionID, "pid": Int(pid), "wid": Int(wid),
-                                           "app": appNameForPid(pid), "coordSpace": space.rawValue]
+                                           "acquisitionId": result.sessionID,
+                                           "app": "This Mac", "coordSpace": space.rawValue]
             if let expiresAt = result.expiresAt {
                 payload["expiresAt"] = Int(expiresAt.timeIntervalSince1970 * 1000)
             }
@@ -991,8 +1045,6 @@ final class CuaEngine {
         } catch ForegroundRequestError.timeout {
             return errorResult("FOREGROUND_TIMEOUT", "the user did not approve the foreground request in time",
                                extra: ["retryable": true])
-        } catch ForegroundRequestError.targetGone {
-            return errorResult("WINDOW_GONE", "the target window disappeared before approval")
         } catch {
             return errorResult("FOREGROUND_FAILED", "could not enter foreground mode")
         }
