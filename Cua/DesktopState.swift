@@ -150,7 +150,7 @@ final class ForegroundCoordinator {
     static let shared = ForegroundCoordinator()
 
     final class PendingResult: @unchecked Sendable {
-        var result: Result<(sessionID: String, expiresAt: Date?), ForegroundRequestError>?
+        var result: Result<String, ForegroundRequestError>?
     }
 
     struct Pending {
@@ -158,7 +158,6 @@ final class ForegroundCoordinator {
         let agent: String
         let reason: String
         let requestedAt: Date
-        let durationMs: Int // 0 = no expiry
         let coordSpace: CoordSpace
         let box: PendingResult
         let semaphore: DispatchSemaphore
@@ -169,7 +168,6 @@ final class ForegroundCoordinator {
         let sessionID: String
         let agent: String
         let startedAt: Date
-        let expiresAt: Date?
     }
 
     struct HumanAbort {
@@ -180,7 +178,6 @@ final class ForegroundCoordinator {
     private let lock = NSLock()
     private var pending: Pending?
     private var active: Active?
-    private var expiry: DispatchWorkItem?
     private var humanAbort: HumanAbort?
 
     var isActive: Bool {
@@ -198,8 +195,8 @@ final class ForegroundCoordinator {
         return active?.startedAt
     }
 
-    func request(agent: String, reason: String, durationMs: Int,
-                 coordSpace: CoordSpace) throws -> (sessionID: String, expiresAt: Date?) {
+    func request(agent: String, reason: String,
+                 coordSpace: CoordSpace) throws -> String {
         let requestId = UUID().uuidString.prefix(8).lowercased()
         let semaphore = DispatchSemaphore(value: 0)
         let box = PendingResult()
@@ -210,12 +207,11 @@ final class ForegroundCoordinator {
         }
         humanAbort = nil
         let p = Pending(requestId: String(requestId), agent: agent, reason: reason,
-                        requestedAt: Date(), durationMs: max(0, durationMs),
-                        coordSpace: coordSpace, box: box, semaphore: semaphore)
+                        requestedAt: Date(), coordSpace: coordSpace, box: box, semaphore: semaphore)
         pending = p
         lock.unlock()
 
-        if semaphore.wait(timeout: .now() + 90) == .timedOut {
+        if semaphore.wait(timeout: .now() + 120) == .timedOut {
             lock.lock()
             if pending?.requestId == p.requestId {
                 pending = nil
@@ -260,18 +256,14 @@ final class ForegroundCoordinator {
         }
         let session = SessionStore.shared.acquireForeground(coordSpace: p.coordSpace,
                                                             agentLabel: p.agent)
-        let expiresAt: Date? = p.durationMs > 0
-            ? Date().addingTimeInterval(Double(p.durationMs) / 1000.0)
-            : nil
         let a = Active(requestId: p.requestId, sessionID: session.id,
-                       agent: p.agent, startedAt: Date(), expiresAt: expiresAt)
+                       agent: p.agent, startedAt: Date())
 
         lock.lock()
         active = a
-        p.box.result = .success((session.id, expiresAt))
+        p.box.result = .success(session.id)
         pending = nil
         lock.unlock()
-        if let expiresAt = expiresAt { scheduleExpiry(a, expiresAt: expiresAt) }
         HumanInputMonitor.shared.start()
         p.semaphore.signal()
         return nil
@@ -292,8 +284,6 @@ final class ForegroundCoordinator {
         lock.lock()
         guard let a = active else { lock.unlock(); return }
         active = nil
-        expiry?.cancel()
-        expiry = nil
         lock.unlock()
         teardown(a)
     }
@@ -306,8 +296,6 @@ final class ForegroundCoordinator {
         lock.lock()
         guard let a = active else { lock.unlock(); return }
         active = nil
-        expiry?.cancel()
-        expiry = nil
         humanAbort = HumanAbort(sessionID: a.sessionID, at: Date())
         lock.unlock()
         teardown(a)
@@ -331,21 +319,16 @@ final class ForegroundCoordinator {
     func status() -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         if let a = active {
-            var d: [String: Any] = ["mode": "active", "requestId": a.requestId,
+            let d: [String: Any] = ["mode": "active", "requestId": a.requestId,
                                     "sessionId": a.sessionID, "agent": a.agent,
                                     "app": "This Mac",
                                     "startedAt": Int(a.startedAt.timeIntervalSince1970 * 1000)]
-            if let expiresAt = a.expiresAt {
-                d["expiresAt"] = Int(expiresAt.timeIntervalSince1970 * 1000)
-                d["remainingMs"] = max(0, Int(expiresAt.timeIntervalSinceNow * 1000))
-            }
             return d
         }
         if let p = pending {
             return ["mode": "pending", "requestId": p.requestId, "agent": p.agent,
                     "reason": p.reason, "app": "This Mac",
-                    "requestedAt": Int(p.requestedAt.timeIntervalSince1970 * 1000),
-                    "durationMs": p.durationMs]
+                    "requestedAt": Int(p.requestedAt.timeIntervalSince1970 * 1000)]
         }
         return ["mode": "idle"]
     }
@@ -356,13 +339,4 @@ final class ForegroundCoordinator {
         AXIndexStore.shared.remove(sessionID: a.sessionID)
     }
 
-    private func scheduleExpiry(_ a: Active, expiresAt: Date) {
-        let item = DispatchWorkItem { [weak self] in
-            self?.lock.lock()
-            if self?.active?.sessionID == a.sessionID { self?.lock.unlock(); self?.stop() }
-            else { self?.lock.unlock() }
-        }
-        lock.lock(); expiry = item; lock.unlock()
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + Double(max(1, Int(expiresAt.timeIntervalSinceNow))), execute: item)
-    }
 }

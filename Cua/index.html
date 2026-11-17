@@ -239,15 +239,13 @@ function renderForeground(s){
   const F = $('fg');
   const fg = s.foreground || {mode:'idle'};
   F.replaceChildren();
-  if (fg.mode !== 'active' && window._fgTimer) { clearInterval(window._fgTimer); window._fgTimer = null; }
   if (!fg || fg.mode === 'idle') {
-    if (window._fgTimer) { clearInterval(window._fgTimer); window._fgTimer = null; }
     return;
   }
   const box = el('div','fg');
   if (fg.mode === 'pending') {
     box.append(el('div','title','Full Mac control request'));
-    box.append(el('div','meta', (fg.agent || 'agent') + ' wants full control of this Mac' + (fg.durationMs ? ' for ' + Math.round(fg.durationMs / 1000) + 's' : ' until stopped') + (fg.reason ? ' — ' + fg.reason : '')));
+    box.append(el('div','meta', (fg.agent || 'agent') + ' wants full control of this Mac until stopped' + (fg.reason ? ' — ' + fg.reason : '')));
     if (!window.__CUA_UI_TOKEN) {
       box.append(el('div','meta','Approve or deny this request in the Cua menubar popover.'));
     }
@@ -261,10 +259,7 @@ function renderForeground(s){
     box.append(actions);
   } else if (fg.mode === 'active') {
     box.append(el('div','title','Full Mac control: ' + (fg.agent || 'agent')));
-    const meta = el('div','meta');
-    const time = el('span','mono', '');
-    meta.append(document.createTextNode((fg.app || 'This Mac') + ' · '), time);
-    box.append(meta);
+    box.append(el('div','meta', (fg.app || 'This Mac') + ' · until stopped'));
     if (!window.__CUA_UI_TOKEN) box.append(el('div','meta','Stop this grant in the Cua menubar popover.'));
     const actions = el('div','actions');
     const stop = el('button','stop','Stop'); stop.type = 'button';
@@ -272,18 +267,6 @@ function renderForeground(s){
     if (!window.__CUA_UI_TOKEN) { stop.disabled = true; }
     actions.append(stop);
     box.append(actions);
-    if (fg.expiresAt) {
-      const tick = () => {
-        const left = Math.max(0, Math.ceil(((fg.expiresAt || 0) - Date.now()) / 1000));
-        time.textContent = left + 's';
-      };
-      tick();
-      if (window._fgTimer) clearInterval(window._fgTimer);
-      window._fgTimer = setInterval(tick, 1000);
-    } else {
-      time.textContent = 'until stopped';
-      if (window._fgTimer) { clearInterval(window._fgTimer); window._fgTimer = null; }
-    }
   }
   F.append(box);
 }
@@ -291,7 +274,7 @@ function signature(s){
   return JSON.stringify({
     ax:s.ax, scr:s.scr, port:s.port,
     sessions:(s.sessions || []).map(x => [x.pid, x.id, x.scope, x.wid, x.app, x.windowTitle, x.agent]),
-    fg:s.foreground ? [s.foreground.mode, s.foreground.requestId, s.foreground.sessionId, s.foreground.expiresAt] : null
+    fg:s.foreground ? [s.foreground.mode, s.foreground.requestId, s.foreground.sessionId] : null
   });
 }
 function render(s){
