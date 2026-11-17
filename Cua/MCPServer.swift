@@ -34,7 +34,7 @@ func toolDefs() -> [[String: Any]] {
     }
     let pidProp: [String: Any] = ["type": "number", "description": "Target pid"]
     let appProp: [String: Any] = ["type": "string", "description": "App name or bundle id (alternative to pid)"]
-    let idProp: [String: Any] = ["type": "string", "description": "acquisitionId from acquire — required on every call after acquire"]
+    let idProp: [String: Any] = ["type": "string", "description": "acquisitionId from acquire, or a foreground grant id — required on every call after acquire"]
     let widProp: [String: Any] = ["type": "number", "description": "Window id. App leases default to the main window; window leases are fixed to their wid."]
     let coordProp: [String: Any] = ["type": "string", "enum": ["image", "norm1000", "screen"],
                                    "description": "Coordinate space. Lease default is set by acquire (norm1000 unless overridden). image = pixels in the last screenshot/zoom; norm1000 = 0...1000 window-relative; screen = absolute points (app/foreground leases only)."]
@@ -53,8 +53,8 @@ func toolDefs() -> [[String: Any]] {
         ["name": "key", "description": "Virtual keycode (+modifiers, optional unicode char, hold ms). Foreground requires an approved grant.", "inputSchema": obj(["acquisitionId": idProp, "code": ["type": "number"], "shift": ["type": "boolean"], "ctrl": ["type": "boolean"], "alt": ["type": "boolean"], "cmd": ["type": "boolean"], "fn": ["type": "boolean"], "char": ["type": "string"], "holdMs": ["type": "number"]], required: ["acquisitionId", "code"])],
         ["name": "scroll", "description": "Pixel scroll at a point in the target window. Positive dy scrolls content up; dx/dy default to 0.", "inputSchema": obj(["acquisitionId": idProp, "wid": widProp, "x": ["type": "number"], "y": ["type": "number"], "at": ["type": "string"], "dx": ["type": "number"], "dy": ["type": "number"], "coordSpace": coordProp], required: ["acquisitionId"])],
         ["name": "drag", "description": "Left-button drag from one point to another. Supports steps, stepMs, startHoldMs, endHoldMs.", "inputSchema": obj(["acquisitionId": idProp, "wid": widProp, "fromX": ["type": "number"], "fromY": ["type": "number"], "toX": ["type": "number"], "toY": ["type": "number"], "from": ["type": "string"], "to": ["type": "string"], "steps": ["type": "number"], "stepMs": ["type": "number"], "startHoldMs": ["type": "number"], "endHoldMs": ["type": "number"], "coordSpace": coordProp], required: ["acquisitionId"])],
-        ["name": "ax", "description": "Accessibility tree dump for the lease target (positional index; same walk as press). Window leases walk only that window.", "inputSchema": obj(["acquisitionId": idProp, "wid": widProp, "depth": ["type": "number"], "maxNodes": ["type": "number"]], required: ["acquisitionId"])],
-        ["name": "press", "description": "AXPress by positional index (guard with expectRole/expectTitle). Window leases act only inside that window.", "inputSchema": obj(["acquisitionId": idProp, "wid": widProp, "index": ["type": "number"], "depth": ["type": "number"], "maxNodes": ["type": "number"], "expectRole": ["type": "string"], "expectTitle": ["type": "string"]], required: ["acquisitionId", "index"])],
+        ["name": "ax", "description": "Accessibility tree dump for the lease target (positional index; same walk as press). Window leases walk only that window; foreground grants require a wid.", "inputSchema": obj(["acquisitionId": idProp, "wid": widProp, "depth": ["type": "number"], "maxNodes": ["type": "number"]], required: ["acquisitionId"])],
+        ["name": "press", "description": "AXPress by positional index (guard with expectRole/expectTitle). Window leases act only inside that window; foreground grants require a wid.", "inputSchema": obj(["acquisitionId": idProp, "wid": widProp, "index": ["type": "number"], "depth": ["type": "number"], "maxNodes": ["type": "number"], "expectRole": ["type": "string"], "expectTitle": ["type": "string"]], required: ["acquisitionId", "index"])],
         ["name": "request_foreground", "description": "Ask the user to approve full control of this Mac (real pointer and keyboard). This blocks up to 120s for menubar approval, revokes every background lease on approval, and returns a foreground grant id. The grant runs until released or stopped.", "inputSchema": obj(["reason": ["type": "string"], "coordSpace": coordProp, "agent": ["type": "string"]], required: [])],
         ["name": "foreground_status", "description": "Return idle/pending/active foreground state and agent.", "inputSchema": obj([:], required: [])],
     ]
@@ -419,7 +419,7 @@ final class MCPServer: NSObject {
             return
         }
         if pathOnly == "/api/state" && req.method == "GET" {
-            let sessions = SessionStore.shared.sessions().map { s -> [String: Any] in
+            let sessions = SessionStore.shared.sessions().filter { $0.scope != .foreground }.map { s -> [String: Any] in
                 var d: [String: Any] = ["pid": Int(s.pid), "app": s.appName, "agent": s.agent ?? "unknown",
                                          "id": s.id, "acquisitionId": s.id, "scope": s.scope.rawValue,
                                          "coordSpace": s.coordSpace.rawValue, "icon": iconBase64Cached(pid: s.pid)]
@@ -592,7 +592,7 @@ final class MCPServer: NSObject {
                 "protocolVersion": "2025-06-18",
                 "serverInfo": ["name": "cua-mcp", "version": "1.1"],
                 "capabilities": ["tools": ["listChanged": false]],
-                "instructions": "Cua controls apps through leases. Workflow: list_apps -> acquire (scope app or window) -> windows/screenshot -> act -> release. Coordinates use the lease coordSpace (norm1000 by default): norm1000 is 0..1000 relative to the target window screenshot; image is pixels in the last screenshot/zoom; screen is absolute points for app and foreground leases. Call screenshot before image-mode actions. Use zoom for small UI, hover to trigger hover states. Background leases post events to the app process and never move the user's pointer; foreground grants use the real HID path. request_foreground grants full-Mac control; background and foreground leases are mutually exclusive. If LEASE_HELD or GLOBAL_FOREGROUND_ACTIVE, stop or ask the user; do not retry in a loop."
+                "instructions": "Cua controls apps through leases. Workflow: list_apps -> acquire (scope app or window) -> windows/screenshot -> act -> release. Coordinates use the lease coordSpace (norm1000 by default): norm1000 is 0..1000 relative to the target window screenshot; image is pixels in the last screenshot/zoom; screen is absolute points for app and foreground leases. Call screenshot before acting in foreground; after human input, take a new screenshot. Use zoom for small UI, hover to trigger hover states. Foreground input tools return SCREENSHOT_REQUIRED before the first screenshot and STALE_OBSERVATION after human input. Background leases post events to the app process and never move the user's pointer; foreground grants use the real HID path. request_foreground grants full-Mac control; background and foreground leases are mutually exclusive. If LEASE_HELD or GLOBAL_FOREGROUND_ACTIVE, stop or ask the user; do not retry in a loop."
             ]
             var r = result
             // Advertise only a protocol version this server actually speaks.

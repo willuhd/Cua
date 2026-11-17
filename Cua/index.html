@@ -106,6 +106,7 @@ let state = null;
 let lastSig = "";
 let lastHeight = 0;
 let inFlight = false;
+let pendingRefresh = false;
 
 const $ = id => document.getElementById(id);
 
@@ -286,11 +287,16 @@ function render(s){
   postHeight();
 }
 async function refresh(){
-  if (document.hidden || inFlight) return;
+  if (document.hidden) return;
+  if (inFlight) { pendingRefresh = true; return; }
   inFlight = true;
   let s;
   try { s = await (await fetch('/api/state', {cache:'no-store'})).json(); }
-  catch (e) { inFlight = false; return; }
+  catch (e) {
+    inFlight = false;
+    if (pendingRefresh) { pendingRefresh = false; refresh(); }
+    return;
+  }
   inFlight = false;
   state = s;
   const port = $('port');
@@ -298,6 +304,7 @@ async function refresh(){
   const sig = signature(s);
   if (sig !== lastSig) { lastSig = sig; render(s); }
   else postHeight();
+  if (pendingRefresh) { pendingRefresh = false; refresh(); }
 }
 $('apply').onclick = async () => {
   const v = +$('port').value;

@@ -336,7 +336,7 @@ final class CuaEngine {
 
     // MARK: – tool bodies
     func toolListApps() -> [String: Any] {
-        let sessions = SessionStore.shared.sessions()
+        let sessions = SessionStore.shared.sessions().filter { $0.scope != .foreground }
         let apps = runningApps().map { a -> [String: Any] in
             let pid = Int32(intVal(a["pid"]))
             var d: [String: Any] = ["pid": Int(pid), "name": a["name"] as! String, "bid": a["bid"] as! String]
@@ -480,6 +480,7 @@ final class CuaEngine {
             }
         }
         let cursorTuple = cursor.map { (Double($0.x), Double($0.y)) }
+        let observationEpoch = s.scope == .foreground ? ForegroundCoordinator.shared.observationEpoch() : nil
         let captured: Result<(Snapshot, Data), ToolFailure> = captureSnapshot(s, target: target, region: region,
                                                                               maxDimension: maxDim, grid: grid,
                                                                               cursor: cursorTuple, space: space)
@@ -489,7 +490,7 @@ final class CuaEngine {
         case .failure(let f): return f.result
         }
         let payload = snapshotPayload(snap, data: data, pid: s.pid)
-        if s.scope == .foreground { ForegroundCoordinator.shared.noteObservation() }
+        if let epoch = observationEpoch { ForegroundCoordinator.shared.noteObservation(at: epoch) }
         let caption = "screenshot wid=\(target.wid) image=\(snap.imageWidth)x\(snap.imageHeight) space=\(space.rawValue) bytes=\(data.count)"
         return toolResultImage(png: data, caption: caption, structured: payload)
     }
@@ -703,6 +704,7 @@ final class CuaEngine {
                                          mouseCursorPosition: mapped.screen, mouseButton: button),
                       let up = CGEvent(mouseEventSource: nil, mouseType: upType,
                                        mouseCursorPosition: mapped.screen, mouseButton: button) else { continue }
+                tagSynthetic(down); tagSynthetic(up)
                 if bg {
                     routeMouse(down, wid: target.wid, pid: s.pid, local: local, clickState: Int64(i + 1), group: group)
                     routeMouse(up, wid: target.wid, pid: s.pid, local: local, clickState: Int64(i + 1), group: group)
@@ -795,6 +797,7 @@ final class CuaEngine {
         let work = {
             guard let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
                                   wheel1: dy, wheel2: dx, wheel3: 0) else { return }
+            tagSynthetic(e)
             e.location = mapped.screen
             if bg {
                 routeMouse(e, wid: target.wid, pid: s.pid, local: local, clickState: 0, group: 0)
@@ -859,6 +862,7 @@ final class CuaEngine {
 
         func event(_ type: CGEventType, _ p: CGPoint) -> CGEvent? {
             guard let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left) else { return nil }
+            tagSynthetic(e)
             if bg {
                 let local = CGPoint(x: p.x - target.bounds.minX, y: p.y - target.bounds.minY)
                 routeMouse(e, wid: target.wid, pid: s.pid, local: local, clickState: 1, group: group)
@@ -903,6 +907,9 @@ final class CuaEngine {
         let pid: Int32
         var wid: UInt32? = nil
         if s.scope == .window {
+            if let requested = pUInt32(params, "wid"), requested != 0, requested != s.wid {
+                return errorResult("WINDOW_NOT_LEASED", "this lease owns window \(s.wid ?? 0), not \(requested)")
+            }
             pid = s.pid
             wid = s.wid
         } else if s.scope == .foreground {
@@ -914,7 +921,12 @@ final class CuaEngine {
             wid = requested
         } else {
             pid = s.pid
-            if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
+            if let requested = pUInt32(params, "wid"), requested != 0 {
+                guard windowOwnerPid(wid: requested) == s.pid else {
+                    return errorResult("WINDOW_NOT_OWNED", "window \(requested) does not belong to this app lease")
+                }
+                wid = requested
+            }
         }
         guard let result = axDump(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit,
                                   deadline: Date().addingTimeInterval(10)) else {
@@ -941,6 +953,9 @@ final class CuaEngine {
         let pid: Int32
         var wid: UInt32? = nil
         if s.scope == .window {
+            if let requested = pUInt32(params, "wid"), requested != 0, requested != s.wid {
+                return errorResult("WINDOW_NOT_LEASED", "this lease owns window \(s.wid ?? 0), not \(requested)")
+            }
             pid = s.pid
             wid = s.wid
         } else if s.scope == .foreground {
@@ -952,7 +967,12 @@ final class CuaEngine {
             wid = requested
         } else {
             pid = s.pid
-            if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
+            if let requested = pUInt32(params, "wid"), requested != 0 {
+                guard windowOwnerPid(wid: requested) == s.pid else {
+                    return errorResult("WINDOW_NOT_OWNED", "window \(requested) does not belong to this app lease")
+                }
+                wid = requested
+            }
         }
         guard AXIndexStore.shared.build(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit,
                                         deadline: Date().addingTimeInterval(10)),

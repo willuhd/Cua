@@ -55,6 +55,10 @@ final class SnapshotStore {
         return byKey[key(sessionID, wid)]
     }
 
+    func removeAll() {
+        lock.lock(); byKey.removeAll(); order.removeAll(); lock.unlock()
+    }
+
     func remove(sessionID: String) {
         lock.lock(); defer { lock.unlock() }
         let prefix = "\(sessionID):"
@@ -76,35 +80,48 @@ final class InputGate {
     private let condition = NSCondition()
     private var busy = false
 
-    func withLock<T>(_ body: () -> T) -> T {
+    private func acquire(until deadline: Date?) -> Bool {
         condition.lock()
-        while busy { condition.wait() }
-        busy = true
-        condition.unlock()
-        defer {
-            condition.lock()
-            busy = false
-            condition.broadcast()
-            condition.unlock()
-        }
-        return body()
-    }
-
-    /// Wait for the current input gesture to finish.
-    func wait(timeout: TimeInterval = 5) -> Bool {
-        condition.lock()
-        let deadline = Date().addingTimeInterval(timeout)
         while busy {
-            if !condition.wait(until: deadline) {
-                condition.unlock()
-                return false
+            if let deadline = deadline {
+                if !condition.wait(until: deadline) {
+                    condition.unlock()
+                    return false
+                }
+            } else {
+                condition.wait()
             }
         }
+        busy = true
         condition.unlock()
         return true
     }
-}
 
+    private func release() {
+        condition.lock()
+        busy = false
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    var isHeld: Bool {
+        condition.lock(); defer { condition.unlock() }
+        return busy
+    }
+
+    func withLock<T>(_ body: () -> T) -> T {
+        _ = acquire(until: nil)
+        defer { release() }
+        return body()
+    }
+
+    /// Take the gate only if the current gesture finishes within the timeout.
+    func withLockIfIdle<T>(timeout: TimeInterval, _ body: () -> T) -> T? {
+        guard acquire(until: Date().addingTimeInterval(timeout)) else { return nil }
+        defer { release() }
+        return body()
+    }
+}
 /// Human input invalidates the foreground observation, not the grant. The
 /// monitor is installed only while a grant is active; pointer movement alone
 /// is not a takeover signal, so it watches clicks, scrolls, and keys only.
@@ -118,6 +135,7 @@ final class HumanInputMonitor {
                                                                .rightMouseDown, .otherMouseDown,
                                                                .scrollWheel, .keyDown]) { event in
             guard ForegroundCoordinator.shared.isActive else { return }
+            if InputGate.shared.isHeld { return }
             if let cg = event.cgEvent,
                cg.getIntegerValueField(.eventSourceUserData) == cuaSyntheticEventTag { return }
             ForegroundCoordinator.shared.noteHumanInput()
@@ -237,17 +255,20 @@ final class ForegroundCoordinator {
         }
         lock.unlock()
 
-        // Hard preemption: wait for the current input gesture, then revoke
-        // every background lease and create the one global foreground lease.
-        guard InputGate.shared.wait(timeout: 5) else {
+        // Hard preemption: take the input gate, clear cached state from every
+        // background lease, and create the one global foreground lease.
+        guard let session = InputGate.shared.withLockIfIdle(timeout: 5, {
+            SnapshotStore.shared.removeAll()
+            AXIndexStore.shared.removeAll()
+            return SessionStore.shared.acquireForeground(coordSpace: p.coordSpace,
+                                                         agent: p.agent)
+        }) else {
             p.box.result = .failure(.busy)
             p.semaphore.signal()
             lock.lock(); if pending?.requestId == p.requestId { pending = nil }; lock.unlock()
             onChange?()
             return .busy
         }
-        let session = SessionStore.shared.acquireForeground(coordSpace: p.coordSpace,
-                                                            agent: p.agent)
         let a = Active(requestId: p.requestId, sessionID: session.id,
                        agent: p.agent, startedAt: Date())
 
@@ -297,12 +318,17 @@ final class ForegroundCoordinator {
         if changed { onChange?() }
     }
 
-    func noteObservation() {
+    func observationEpoch() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return humanEpoch
+    }
+
+    func noteObservation(at epoch: Int) {
         var changed = false
         lock.lock()
         if active != nil {
-            changed = !hasObservation || observedEpoch != humanEpoch
-            observedEpoch = humanEpoch
+            changed = !hasObservation || observedEpoch != epoch
+            observedEpoch = epoch
             hasObservation = true
         }
         lock.unlock()
