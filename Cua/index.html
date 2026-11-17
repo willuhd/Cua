@@ -260,6 +260,8 @@ function renderForeground(s){
   } else if (fg.mode === 'active') {
     box.append(el('div','title','Full Mac control: ' + (fg.agent || 'agent')));
     box.append(el('div','meta', (fg.app || 'This Mac') + ' · until stopped'));
+    if (fg.observation === 'needs-screenshot') box.append(el('div','meta','Agent needs a first screenshot.'));
+    else if (fg.observation === 'stale') box.append(el('div','meta','Screen changed — agent will re-check.'));
     if (!window.__CUA_UI_TOKEN) box.append(el('div','meta','Stop this grant in the Cua menubar popover.'));
     const actions = el('div','actions');
     const stop = el('button','stop','Stop'); stop.type = 'button';
@@ -274,7 +276,7 @@ function signature(s){
   return JSON.stringify({
     ax:s.ax, scr:s.scr, port:s.port,
     sessions:(s.sessions || []).map(x => [x.pid, x.id, x.scope, x.wid, x.app, x.windowTitle, x.agent]),
-    fg:s.foreground ? [s.foreground.mode, s.foreground.requestId, s.foreground.sessionId] : null
+    fg:s.foreground ? [s.foreground.mode, s.foreground.requestId, s.foreground.sessionId, s.foreground.observation] : null
   });
 }
 function render(s){

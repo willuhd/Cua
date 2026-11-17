@@ -110,9 +110,9 @@ final class InputGate {
     }
 }
 
-/// Human input always wins over an agent's foreground grant. The monitor is
-/// installed only while a grant is active; pointer movement alone is not a
-/// takeover signal, so it watches clicks, scrolls, and keys only.
+/// Human input invalidates the foreground observation, not the grant. The
+/// monitor is installed only while a grant is active; pointer movement alone
+/// is not a takeover signal, so it watches clicks, scrolls, and keys only.
 final class HumanInputMonitor {
     static let shared = HumanInputMonitor()
     private var monitor: Any?
@@ -123,10 +123,7 @@ final class HumanInputMonitor {
                                                                .rightMouseDown, .otherMouseDown,
                                                                .scrollWheel, .keyDown]) { _ in
             guard ForegroundCoordinator.shared.isActive, !InputGate.shared.isHeld else { return }
-            // Ignore the small click/key tail from approving in the menubar.
-            if let started = ForegroundCoordinator.shared.activeStartedAt,
-               Date().timeIntervalSince(started) < 0.8 { return }
-            DispatchQueue.global(qos: .userInitiated).async { ForegroundCoordinator.shared.abortForHuman() }
+            ForegroundCoordinator.shared.noteHumanInput()
         }
     }
 
@@ -170,15 +167,12 @@ final class ForegroundCoordinator {
         let startedAt: Date
     }
 
-    struct HumanAbort {
-        let sessionID: String
-        let at: Date
-    }
-
     private let lock = NSLock()
     private var pending: Pending?
     private var active: Active?
-    private var humanAbort: HumanAbort?
+    private var humanEpoch: Int = 0
+    private var observedEpoch: Int = 0
+    private var hasObservation = false
 
     var isActive: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -188,11 +182,6 @@ final class ForegroundCoordinator {
     var activeSessionID: String? {
         lock.lock(); defer { lock.unlock() }
         return active?.sessionID
-    }
-
-    var activeStartedAt: Date? {
-        lock.lock(); defer { lock.unlock() }
-        return active?.startedAt
     }
 
     func request(agent: String, reason: String,
@@ -205,7 +194,9 @@ final class ForegroundCoordinator {
             lock.unlock()
             throw ForegroundRequestError.busy
         }
-        humanAbort = nil
+        humanEpoch = 0
+        observedEpoch = 0
+        hasObservation = false
         let p = Pending(requestId: String(requestId), agent: agent, reason: reason,
                         requestedAt: Date(), coordSpace: coordSpace, box: box, semaphore: semaphore)
         pending = p
@@ -260,6 +251,9 @@ final class ForegroundCoordinator {
                        agent: p.agent, startedAt: Date())
 
         lock.lock()
+        humanEpoch = 0
+        observedEpoch = 0
+        hasObservation = false
         active = a
         p.box.result = .success(session.id)
         pending = nil
@@ -288,24 +282,26 @@ final class ForegroundCoordinator {
         teardown(a)
     }
 
-    /// Human input took the pointer. Keep a short-lived revocation record so
-    /// the agent's next call can get a fresh screenshot instead of a generic
-    /// invalid-id error.
-    func abortForHuman() {
-        HumanInputMonitor.shared.stop()
+    func noteHumanInput() {
         lock.lock()
-        guard let a = active else { lock.unlock(); return }
-        active = nil
-        humanAbort = HumanAbort(sessionID: a.sessionID, at: Date())
+        if active != nil { humanEpoch += 1 }
         lock.unlock()
-        teardown(a)
     }
 
-    func takeHumanAbort(sessionID: String) -> HumanAbort? {
+    func noteObservation() {
+        lock.lock()
+        if active != nil {
+            observedEpoch = humanEpoch
+            hasObservation = true
+        }
+        lock.unlock()
+    }
+
+    func observationStatus() -> (needsScreenshot: Bool, dirty: Bool) {
         lock.lock(); defer { lock.unlock() }
-        guard let h = humanAbort, h.sessionID.lowercased() == sessionID.lowercased() else { return nil }
-        humanAbort = nil
-        return h
+        guard active != nil else { return (false, false) }
+        if !hasObservation { return (true, false) }
+        return (false, observedEpoch != humanEpoch)
     }
 
     func release(sessionID: String) -> Bool {
@@ -319,9 +315,11 @@ final class ForegroundCoordinator {
     func status() -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         if let a = active {
+            let observation = !hasObservation ? "needs-screenshot"
+                : (observedEpoch == humanEpoch ? "clean" : "stale")
             let d: [String: Any] = ["mode": "active", "requestId": a.requestId,
                                     "sessionId": a.sessionID, "agent": a.agent,
-                                    "app": "This Mac",
+                                    "app": "This Mac", "observation": observation,
                                     "startedAt": Int(a.startedAt.timeIntervalSince1970 * 1000)]
             return d
         }

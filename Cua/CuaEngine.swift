@@ -101,27 +101,20 @@ final class CuaEngine {
         }
     }
 
-    private func humanAbortResult(at: Date) -> [String: Any] {
-        let structured: [String: Any] = [
-            "code": "FOREGROUND_REVOKED_BY_HUMAN",
-            "message": "the user took over; foreground access ended",
-            "retryable": false,
-            "suggested": "request_foreground again or use a background lease",
-            "revokedAt": Int(at.timeIntervalSince1970 * 1000)
-        ]
-        if let image = captureScreenImage(), let data = pngData(from: image) {
-            var result = toolResultImage(
-                png: data,
-                caption: "Foreground access ended because the user took over. Current screen attached; re-observe before acting.",
-                structured: structured)
-            result["isError"] = true
-            return result
+    private func foregroundObservationFailure(_ s: Session) -> [String: Any]? {
+        guard s.scope == .foreground else { return nil }
+        let state = ForegroundCoordinator.shared.observationStatus()
+        if state.needsScreenshot {
+            return errorResult("SCREENSHOT_REQUIRED",
+                               "take a screenshot before acting in foreground",
+                               hint: "Call screenshot with this acquisitionId.")
         }
-        return errorResult("FOREGROUND_REVOKED_BY_HUMAN",
-                           "the user took over; foreground access ended",
-                           extra: ["retryable": false,
-                                   "suggested": "request_foreground again or use a background lease",
-                                   "revokedAt": Int(at.timeIntervalSince1970 * 1000)])
+        if state.dirty {
+            return errorResult("STALE_OBSERVATION",
+                               "the screen changed after your last screenshot",
+                               hint: "Take a new screenshot before acting.")
+        }
+        return nil
     }
 
     func requireLease(params: [String: Any]) -> Result<Session, ToolFailure> {
@@ -140,10 +133,6 @@ final class CuaEngine {
             }
             return .success(s)
         case .failure(let e):
-            if case .invalidId = e,
-               let abort = ForegroundCoordinator.shared.takeHumanAbort(sessionID: id) {
-                return .failure(ToolFailure(result: humanAbortResult(at: abort.at)))
-            }
             return .failure(ToolFailure(result: leaseErrorResult(e)))
         }
     }
@@ -521,6 +510,7 @@ final class CuaEngine {
         case .failure(let f): return f.result
         }
         let payload = snapshotPayload(snap, data: data, pid: s.pid)
+        if s.scope == .foreground { ForegroundCoordinator.shared.noteObservation() }
         let caption = "screenshot wid=\(target.wid) image=\(snap.imageWidth)x\(snap.imageHeight) space=\(space.rawValue) bytes=\(data.count)"
         return toolResultImage(png: data, caption: caption, structured: payload)
     }
@@ -638,6 +628,7 @@ final class CuaEngine {
         case .success(let value): s = value
         case .failure(let f): return f.result
         }
+        if let f = foregroundObservationFailure(s) { return f }
         let space: CoordSpace
         switch coordSpace(s, params) {
         case .some(let v): space = v
@@ -701,6 +692,7 @@ final class CuaEngine {
         case .success(let value): s = value
         case .failure(let f): return f.result
         }
+        if let f = foregroundObservationFailure(s) { return f }
         let space: CoordSpace
         switch coordSpace(s, params) {
         case .some(let v): space = v
@@ -763,6 +755,7 @@ final class CuaEngine {
         case .success(let value): s = value
         case .failure(let f): return f.result
         }
+        if let f = foregroundObservationFailure(s) { return f }
         guard let text = params["text"] as? String else { return errorResult("BAD_ARGS", "pass text") }
         let foreground = s.scope == .foreground
         let wantBG = params["bg"] as? Bool ?? true
@@ -789,6 +782,7 @@ final class CuaEngine {
         case .success(let value): s = value
         case .failure(let f): return f.result
         }
+        if let f = foregroundObservationFailure(s) { return f }
         guard let code = pUInt16(params, "code") else { return errorResult("BAD_ARGS", "pass a valid key code 0...65535") }
         let foreground = s.scope == .foreground
         let wantBG = params["bg"] as? Bool ?? true
@@ -824,6 +818,7 @@ final class CuaEngine {
         case .success(let value): s = value
         case .failure(let f): return f.result
         }
+        if let f = foregroundObservationFailure(s) { return f }
         let space: CoordSpace
         switch coordSpace(s, params) {
         case .some(let v): space = v
@@ -873,6 +868,7 @@ final class CuaEngine {
         case .success(let value): s = value
         case .failure(let f): return f.result
         }
+        if let f = foregroundObservationFailure(s) { return f }
         let space: CoordSpace
         switch coordSpace(s, params) {
         case .some(let v): space = v
@@ -983,6 +979,7 @@ final class CuaEngine {
         case .success(let value): s = value
         case .failure(let f): return f.result
         }
+        if let f = foregroundObservationFailure(s) { return f }
         guard let idx = pInt(params, "index") else { return errorResult("BAD_ARGS", "pass index") }
         let depth = clampInt(pInt(params, "depth"), 1, 64, 8)
         let limit = clampInt(pInt(params, "maxNodes"), 1, 20_000, 4000)
