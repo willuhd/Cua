@@ -165,6 +165,9 @@ final class MCPServer: NSObject {
         if name == "release", let id = args["acquisitionId"] as? String {
             dropLeaseQueue(id)
         }
+        if name == "acquire" || name == "release" {
+            onStateChange?()
+        }
         return result
     }
     // A peer that connects and then says nothing would otherwise pin a worker forever,

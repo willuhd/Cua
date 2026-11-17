@@ -165,6 +165,7 @@ final class ForegroundCoordinator {
     }
 
     private let lock = NSLock()
+    var onChange: (() -> Void)?
     private var pending: Pending?
     private var active: Active?
     private var humanEpoch: Int = 0
@@ -198,12 +199,14 @@ final class ForegroundCoordinator {
                         requestedAt: Date(), coordSpace: coordSpace, box: box, semaphore: semaphore)
         pending = p
         lock.unlock()
+        onChange?()
 
         if semaphore.wait(timeout: .now() + 120) == .timedOut {
             lock.lock()
             if pending?.requestId == p.requestId {
                 pending = nil
                 lock.unlock()
+                onChange?()
                 throw ForegroundRequestError.timeout
             }
             lock.unlock()
@@ -240,6 +243,7 @@ final class ForegroundCoordinator {
             p.box.result = .failure(.busy)
             p.semaphore.signal()
             lock.lock(); if pending?.requestId == p.requestId { pending = nil }; lock.unlock()
+            onChange?()
             return .busy
         }
         let session = SessionStore.shared.acquireForeground(coordSpace: p.coordSpace,
@@ -257,6 +261,7 @@ final class ForegroundCoordinator {
         lock.unlock()
         HumanInputMonitor.shared.start()
         p.semaphore.signal()
+        onChange?()
         return nil
     }
 
@@ -267,6 +272,7 @@ final class ForegroundCoordinator {
         p.box.result = .failure(.denied)
         lock.unlock()
         p.semaphore.signal()
+        onChange?()
         return true
     }
 
@@ -280,18 +286,27 @@ final class ForegroundCoordinator {
     }
 
     func noteHumanInput() {
+        var changed = false
         lock.lock()
-        if active != nil { humanEpoch += 1 }
+        if active != nil {
+            let wasClean = hasObservation && observedEpoch == humanEpoch
+            humanEpoch += 1
+            changed = wasClean
+        }
         lock.unlock()
+        if changed { onChange?() }
     }
 
     func noteObservation() {
+        var changed = false
         lock.lock()
         if active != nil {
+            changed = !hasObservation || observedEpoch != humanEpoch
             observedEpoch = humanEpoch
             hasObservation = true
         }
         lock.unlock()
+        if changed { onChange?() }
     }
 
     func observationStatus() -> (needsScreenshot: Bool, dirty: Bool) {

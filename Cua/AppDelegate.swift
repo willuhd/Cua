@@ -54,9 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Don't spam prompt every launch; only if missing, show popover note.
             // Grant button in popover fires the real prompt.
         }
-        MCPServer.shared.onStateChange = { [weak self] in
+        let refreshUI = { [weak self] in
             DispatchQueue.main.async { self?.popVC.updateTable() }
         }
+        MCPServer.shared.onStateChange = refreshUI
+        ForegroundCoordinator.shared.onChange = refreshUI
         MCPServer.shared.start(port: MCPServer.shared.port)
         DispatchQueue.main.async { [weak self] in _ = self?.popVC?.view }
         clog("launched, MCP on 127.0.0.1:\(MCPServer.shared.port)")

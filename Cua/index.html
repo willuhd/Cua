@@ -317,5 +317,4 @@ $('quit').onclick = async () => { await postJSON('/api/quit', {}); };
 window.addEventListener('focus', refresh);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 refresh();
-setInterval(refresh, 1000);
 </script></body></html>

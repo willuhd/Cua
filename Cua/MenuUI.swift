@@ -153,7 +153,7 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { clog("webview provisional fail: \(error.localizedDescription)") }
     func updateTable() {
         guard isViewLoaded else { return }
-        // JS polls /api/state itself; nothing to do here. Keep symbol for AppDelegate.
+        refresh()
     }
     func refresh() {
         guard isViewLoaded else { return }
