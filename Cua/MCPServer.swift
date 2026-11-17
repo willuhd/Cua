@@ -112,8 +112,6 @@ final class MCPServer: NSObject {
         get { stateLock.lock(); defer { stateLock.unlock() }; return _port }
         set { stateLock.lock(); _port = newValue; stateLock.unlock() }
     }
-    var mcpSessions: [String: Date] = [:]
-    var mcpLock = NSLock()
     var queue = DispatchQueue(label: "cua.mcp", qos: .userInitiated, attributes: .concurrent)
     // Control-plane calls (lease changes, listing) are serialized. Read-only
     // lease calls (screenshot/AX/zoom) use a per-lease queue, so two windows
@@ -125,7 +123,7 @@ final class MCPServer: NSObject {
     private var leaseQueues: [String: DispatchQueue] = [:]
     private let controlTools: Set<String> = ["list_apps", "windows", "acquire", "release",
                                              "foreground_status"]
-    private let inputTools: Set<String> = ["click", "type", "key", "scroll", "drag", "hover", "press"]
+    private let inputTools: Set<String> = ["click", "type", "key", "scroll", "drag", "hover"]
     let connGate = DispatchSemaphore(value: 8)
     var onStateChange: (() -> Void)?
     private let iconLock = NSLock()
@@ -144,6 +142,10 @@ final class MCPServer: NSObject {
         leaseQueueLock.lock(); leaseQueues.removeValue(forKey: id.lowercased()); leaseQueueLock.unlock()
     }
 
+    private func dropAllLeaseQueues() {
+        leaseQueueLock.lock(); leaseQueues.removeAll(); leaseQueueLock.unlock()
+    }
+
     func runTool(name: String, args: [String: Any]) -> [String: Any] {
         var result: [String: Any] = [:]
         if name == "request_foreground" {
@@ -152,8 +154,16 @@ final class MCPServer: NSObject {
             // approves and the coordinator revokes them.
             foregroundQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
         } else if inputTools.contains(name) {
-            InputGate.shared.withLock {
-                result = CuaEngine.shared.dispatch(tool: name, params: args)
+            if let id = args["acquisitionId"] as? String, !id.isEmpty {
+                queueForLease(id).sync {
+                    InputGate.shared.withLock {
+                        result = CuaEngine.shared.dispatch(tool: name, params: args)
+                    }
+                }
+            } else {
+                InputGate.shared.withLock {
+                    result = CuaEngine.shared.dispatch(tool: name, params: args)
+                }
             }
         } else if controlTools.contains(name) {
             controlQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
@@ -476,6 +486,7 @@ final class MCPServer: NSObject {
             switch action {
             case "approve":
                 ok = ForegroundCoordinator.shared.approve(requestId: requestId) == nil
+                if ok { dropAllLeaseQueues() }
             case "deny":
                 ok = ForegroundCoordinator.shared.deny(requestId: requestId)
             case "stop":
@@ -587,7 +598,6 @@ final class MCPServer: NSObject {
         switch method {
         case "initialize":
             let sid = UUID().uuidString
-            mcpLock.lock(); mcpSessions[sid] = Date(); mcpLock.unlock()
             let result: [String: Any] = [
                 "protocolVersion": "2025-06-18",
                 "serverInfo": ["name": "cua-mcp", "version": "1.1"],

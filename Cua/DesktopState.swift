@@ -135,9 +135,11 @@ final class HumanInputMonitor {
                                                                .rightMouseDown, .otherMouseDown,
                                                                .scrollWheel, .keyDown]) { event in
             guard ForegroundCoordinator.shared.isActive else { return }
-            if InputGate.shared.isHeld { return }
-            if let cg = event.cgEvent,
-               cg.getIntegerValueField(.eventSourceUserData) == cuaSyntheticEventTag { return }
+            if let cg = event.cgEvent {
+                if cg.getIntegerValueField(.eventSourceUserData) == cuaSyntheticEventTag { return }
+            } else if InputGate.shared.isHeld {
+                return
+            }
             ForegroundCoordinator.shared.noteHumanInput()
         }
     }

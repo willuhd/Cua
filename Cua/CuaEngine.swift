@@ -590,7 +590,7 @@ final class CuaEngine {
             return errorResult("BAD_ARGS", "pass x,y or at")
         }
         SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(mapped.screen.x), y: Double(mapped.screen.y))
-        let grid = clampInt(pInt(params, "grid"), 0, 1000, 0)
+        let grid = clampInt(pInt(params, "grid"), 0, 1000, 100)
         let captured = captureSnapshot(s, target: target, region: CGRect(x: 0, y: 0, width: 1, height: 1),
                                        maxDimension: 2560, grid: grid,
                                        cursor: (Double(mapped.screen.x), Double(mapped.screen.y)),

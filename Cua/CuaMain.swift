@@ -14,7 +14,8 @@
 //
 // Foreground: request_foreground waits for explicit menubar approval, revokes
 // every background lease, and gives the agent the real pointer/focus for the
-// whole Mac. It runs until released, stopped, or human input. Only one grant.
+// whole Mac. It runs until released or stopped. Human input invalidates the
+// last screenshot until the agent re-observes. Only one grant can exist.
 //
 // Build: Xcode project (Cua.xcodeproj, target Cua, macOS 14.0, com.willuhd.Cua).
 //   xcodebuild -project Cua.xcodeproj -target Cua -configuration Release build CODE_SIGNING_ALLOWED=NO

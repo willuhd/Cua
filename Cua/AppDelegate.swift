@@ -59,6 +59,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         MCPServer.shared.onStateChange = refreshUI
         ForegroundCoordinator.shared.onChange = refreshUI
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in self?.popVC.updateTable() }
         MCPServer.shared.start(port: MCPServer.shared.port)
         DispatchQueue.main.async { [weak self] in _ = self?.popVC?.view }
         clog("launched, MCP on 127.0.0.1:\(MCPServer.shared.port)")

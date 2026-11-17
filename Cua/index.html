@@ -187,10 +187,9 @@ function renderPerms(s){
 function freeSession(s){
   return postJSON('/api/free', s.scope === 'window' ? {pid:s.pid, wid:s.wid} : {pid:s.pid}).then(refresh);
 }
-function sessionRow(s, showIcon){
+function sessionRow(s){
   const d = el('div','sess');
   d.setAttribute('role','listitem');
-  if (showIcon && s.icon) { const img = el('img'); img.src = 'data:image/png;base64,' + s.icon; d.append(img); }
   const n = el('div','n');
   const name = el('span','name', s.scope === 'window' ? (s.windowTitle || ('Window ' + s.wid)) : s.app);
   const id = el('span','id', 'id: ' + (s.id || s.acquisitionId));
@@ -229,9 +228,9 @@ function renderSessions(s){
     head.append(el('span','gname', name));
     g.append(head);
     if (appRow) {
-      g.append(sessionRow(appRow, false));
+      g.append(sessionRow(appRow));
     } else {
-      for (const r of rows) g.append(sessionRow(r, false));
+      for (const r of rows) g.append(sessionRow(r));
     }
     L.append(g);
   }
@@ -286,8 +285,8 @@ function render(s){
   renderForeground(s);
   postHeight();
 }
-async function refresh(){
-  if (document.hidden) return;
+async function refresh(force){
+  if (document.hidden && !force) return;
   if (inFlight) { pendingRefresh = true; return; }
   inFlight = true;
   let s;
@@ -321,7 +320,7 @@ $('copy').onclick = async () => {
   const b = $('copy'); b.textContent = 'Copied!'; setTimeout(() => b.textContent = 'Copy', 1200);
 };
 $('quit').onclick = async () => { await postJSON('/api/quit', {}); };
-window.addEventListener('focus', refresh);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-refresh();
+window.addEventListener('focus', () => refresh(true));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
+refresh(true);
 </script></body></html>

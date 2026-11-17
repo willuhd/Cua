@@ -153,12 +153,14 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { clog("webview provisional fail: \(error.localizedDescription)") }
     func updateTable() {
         guard isViewLoaded else { return }
-        refresh()
+        if webView.url?.absoluteString == url().absoluteString {
+            webView.evaluateJavaScript("refresh()")
+        }
     }
     func refresh() {
         guard isViewLoaded else { return }
         if webView.url?.absoluteString == url().absoluteString {
-            webView.evaluateJavaScript("refresh()")
+            webView.evaluateJavaScript("refresh(true)")
         } else {
             webView.load(URLRequest(url: url()))
         }
