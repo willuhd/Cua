@@ -13,11 +13,13 @@ struct AXNode { var idx: Int; var role: String; var title: String; var pos: CGPo
 final class AXIndexStore {
     static let shared = AXIndexStore()
     private let lock = NSLock()
-    private var bySession: [String: (nodes: [AXNode], truncated: Bool)] = [:]
+    private var bySession: [String: (nodes: [AXNode], truncated: Bool, timedOut: Bool)] = [:]
 
-    func build(sessionID: String, pid: Int32, wid: UInt32?, maxDepth: Int, limit: Int) -> Bool {
+    func build(sessionID: String, pid: Int32, wid: UInt32?, maxDepth: Int, limit: Int,
+               deadline: Date? = nil) -> Bool {
         var nodes: [AXNode] = []
         var truncated = false
+        var timedOut = false
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 2.0)
         let root: AXUIElement
@@ -28,12 +30,12 @@ final class AXIndexStore {
             root = app
         }
         axWalk(root, depth: 0, maxDepth: max(1, min(maxDepth, 64)), limit: max(1, min(limit, 20_000)),
-               nodes: &nodes, truncated: &truncated)
-        lock.lock(); bySession[sessionID] = (nodes, truncated); lock.unlock()
+               deadline: deadline, nodes: &nodes, truncated: &truncated, timedOut: &timedOut)
+        lock.lock(); bySession[sessionID] = (nodes, truncated, timedOut); lock.unlock()
         return true
     }
 
-    func nodes(sessionID: String) -> (nodes: [AXNode], truncated: Bool)? {
+    func nodes(sessionID: String) -> (nodes: [AXNode], truncated: Bool, timedOut: Bool)? {
         lock.lock(); defer { lock.unlock() }
         return bySession[sessionID]
     }
@@ -44,7 +46,10 @@ final class AXIndexStore {
 }
 
 private func axWalk(_ el: AXUIElement, depth: Int, maxDepth: Int, limit: Int,
-                    nodes: inout [AXNode], truncated: inout Bool) {
+                    deadline: Date?, nodes: inout [AXNode], truncated: inout Bool,
+                    timedOut: inout Bool) {
+    if timedOut { return }
+    if let deadline = deadline, Date() > deadline { timedOut = true; return }
     if depth > maxDepth { return }
     if nodes.count >= limit { truncated = true; return }
     var role: AnyObject?
@@ -81,18 +86,30 @@ private func axWalk(_ el: AXUIElement, depth: Int, maxDepth: Int, limit: Int,
     var kids: AnyObject?
     if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &kids) == .success,
        let arr = kids as? [AXUIElement] {
-        for k in arr { axWalk(k, depth: depth + 1, maxDepth: maxDepth, limit: limit, nodes: &nodes, truncated: &truncated) }
+        for k in arr {
+            axWalk(k, depth: depth + 1, maxDepth: maxDepth, limit: limit, deadline: deadline,
+                   nodes: &nodes, truncated: &truncated, timedOut: &timedOut)
+            if timedOut { return }
+        }
     } else if AXUIElementCopyAttributeValue(el, kAXWindowsAttribute as CFString, &kids) == .success,
               let arr = kids as? [AXUIElement] {
-        for k in arr { axWalk(k, depth: depth + 1, maxDepth: maxDepth, limit: limit, nodes: &nodes, truncated: &truncated) }
+        for k in arr {
+            axWalk(k, depth: depth + 1, maxDepth: maxDepth, limit: limit, deadline: deadline,
+                   nodes: &nodes, truncated: &truncated, timedOut: &timedOut)
+            if timedOut { return }
+        }
     }
 }
 
-func axDump(sessionID: String, pid: Int32, wid: UInt32?, maxDepth: Int, limit: Int) -> String? {
-    guard AXIndexStore.shared.build(sessionID: sessionID, pid: pid, wid: wid, maxDepth: maxDepth, limit: limit) else {
+func axDump(sessionID: String, pid: Int32, wid: UInt32?, maxDepth: Int, limit: Int,
+            deadline: Date? = nil) -> (text: String, timedOut: Bool)? {
+    guard AXIndexStore.shared.build(sessionID: sessionID, pid: pid, wid: wid, maxDepth: maxDepth,
+                                    limit: limit, deadline: deadline) else {
         return nil
     }
-    guard let (nodes, truncated) = AXIndexStore.shared.nodes(sessionID: sessionID) else { return "" }
+    guard let (nodes, truncated, timedOut) = AXIndexStore.shared.nodes(sessionID: sessionID) else {
+        return ("", false)
+    }
     var lines: [String] = []
     for n in nodes {
         var s = "[\(n.idx)] \(n.role)"
@@ -103,5 +120,5 @@ func axDump(sessionID: String, pid: Int32, wid: UInt32?, maxDepth: Int, limit: I
         lines.append(s)
     }
     if truncated { lines.append("(truncated at \(limit) nodes – raise maxNodes)") }
-    return lines.joined(separator: "\n")
+    return (lines.joined(separator: "\n"), timedOut)
 }

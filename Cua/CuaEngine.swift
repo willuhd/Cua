@@ -916,11 +916,16 @@ final class CuaEngine {
             pid = s.pid
             if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
         }
-        guard let text = axDump(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit) else {
+        guard let result = axDump(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit,
+                                  deadline: Date().addingTimeInterval(10)) else {
             return errorResult("AX_UNAVAILABLE", "could not read the accessibility tree",
                                extra: ["hint": "Grant Accessibility to Cua and make sure the window still exists."])
         }
-        return toolResultText(text)
+        if result.timedOut {
+            return errorResult("AX_TIMEOUT", "the accessibility walk exceeded 10 seconds",
+                               hint: "Retry with a lower depth/maxNodes or use screenshots.")
+        }
+        return toolResultText(result.text)
     }
 
     func toolPress(params: [String: Any]) -> [String: Any] {
@@ -949,9 +954,14 @@ final class CuaEngine {
             pid = s.pid
             if let requested = pUInt32(params, "wid"), requested != 0 { wid = requested }
         }
-        guard AXIndexStore.shared.build(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit),
-              let (nodes, _) = AXIndexStore.shared.nodes(sessionID: s.id) else {
+        guard AXIndexStore.shared.build(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit,
+                                        deadline: Date().addingTimeInterval(10)),
+              let (nodes, _, timedOut) = AXIndexStore.shared.nodes(sessionID: s.id) else {
             return errorResult("AX_UNAVAILABLE", "could not build the accessibility tree")
+        }
+        if timedOut {
+            return errorResult("AX_TIMEOUT", "the accessibility walk exceeded 10 seconds",
+                               hint: "Retry with a lower depth/maxNodes or use screenshots.")
         }
         guard idx >= 0, idx < nodes.count else {
             return errorResult("BAD_INDEX", "index \(idx) is out of range 0...\(max(0, nodes.count - 1))")
