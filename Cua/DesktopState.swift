@@ -74,32 +74,27 @@ final class SnapshotStore {
 final class InputGate {
     static let shared = InputGate()
     private let condition = NSCondition()
-    private var depth = 0
+    private var busy = false
 
     func withLock<T>(_ body: () -> T) -> T {
         condition.lock()
-        depth += 1
+        while busy { condition.wait() }
+        busy = true
         condition.unlock()
         defer {
             condition.lock()
-            depth -= 1
-            if depth == 0 { condition.broadcast() }
+            busy = false
+            condition.broadcast()
             condition.unlock()
         }
         return body()
     }
 
-    var isHeld: Bool {
-        condition.lock(); defer { condition.unlock() }
-        return depth > 0
-    }
-
-    /// Wait for the current input gesture to finish. New gestures are blocked
-    /// by the lease state while a foreground approval is being committed.
+    /// Wait for the current input gesture to finish.
     func wait(timeout: TimeInterval = 5) -> Bool {
         condition.lock()
         let deadline = Date().addingTimeInterval(timeout)
-        while depth > 0 {
+        while busy {
             if !condition.wait(until: deadline) {
                 condition.unlock()
                 return false
@@ -121,8 +116,10 @@ final class HumanInputMonitor {
         guard monitor == nil else { return }
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown,
                                                                .rightMouseDown, .otherMouseDown,
-                                                               .scrollWheel, .keyDown]) { _ in
-            guard ForegroundCoordinator.shared.isActive, !InputGate.shared.isHeld else { return }
+                                                               .scrollWheel, .keyDown]) { event in
+            guard ForegroundCoordinator.shared.isActive else { return }
+            if let cg = event.cgEvent,
+               cg.getIntegerValueField(.eventSourceUserData) == cuaSyntheticEventTag { return }
             ForegroundCoordinator.shared.noteHumanInput()
         }
     }

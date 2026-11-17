@@ -120,7 +120,6 @@ final class MCPServer: NSObject {
     // can be observed concurrently. Every input gesture takes the one global
     // InputGate, matching the single hardware pointer/focus.
     let controlQueue = DispatchQueue(label: "cua.control", qos: .userInitiated)
-    let inputQueue = DispatchQueue(label: "cua.input", qos: .userInitiated)
     let foregroundQueue = DispatchQueue(label: "cua.foreground", qos: .userInitiated)
     private let leaseQueueLock = NSLock()
     private var leaseQueues: [String: DispatchQueue] = [:]
@@ -154,7 +153,7 @@ final class MCPServer: NSObject {
             foregroundQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
         } else if inputTools.contains(name) {
             InputGate.shared.withLock {
-                inputQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
+                result = CuaEngine.shared.dispatch(tool: name, params: args)
             }
         } else if controlTools.contains(name) {
             controlQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }

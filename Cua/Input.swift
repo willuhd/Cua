@@ -7,7 +7,12 @@ import Network
 import WebKit
 import Darwin
 
-// MARK: – event input (same as CLI, focus journaled)
+// MARK: – event input
+let cuaSyntheticEventTag: Int64 = 0x43554131
+func tagSynthetic(_ e: CGEvent) {
+    e.setIntegerValueField(.eventSourceUserData, value: cuaSyntheticEventTag)
+}
+
 @discardableResult
 func postToPid(_ e: CGEvent, pid: Int32) -> Int32 {
     if let fn = Sky.shared.SLEventPostToPid { return fn(pid, e) }
@@ -15,6 +20,7 @@ func postToPid(_ e: CGEvent, pid: Int32) -> Int32 {
     return 0
 }
 func routeMouse(_ e: CGEvent, wid: UInt32, pid: Int32, local: CGPoint, clickState: Int64, group: Int64) {
+    tagSynthetic(e)
     if let fn = Sky.shared.CGEventSetWindowLocationFn {
         _ = fn(e, local)
     }
@@ -35,6 +41,7 @@ func warpCursor(to p: CGPoint) {
 func postMouseMoved(pid: Int32, wid: UInt32, local: CGPoint, screen: CGPoint, bg: Bool, group: Int64) {
     guard let e = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
                           mouseCursorPosition: screen, mouseButton: .left) else { return }
+    tagSynthetic(e)
     if bg {
         routeMouse(e, wid: wid, pid: pid, local: local, clickState: 0, group: group)
         postToPid(e, pid: pid)
@@ -44,12 +51,14 @@ func postMouseMoved(pid: Int32, wid: UInt32, local: CGPoint, screen: CGPoint, bg
 }
 func postKey(_ code: UInt16, pid: Int32, bg: Bool, holdMs: Int, flags: CGEventFlags = [], char: String? = nil) {
     if let dn = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true) {
+        tagSynthetic(dn)
         dn.flags = flags
         if let c = char { keyboardSetUnicode(dn, c) }
         if bg { postToPid(dn, pid: pid) } else { dn.post(tap: .cghidEventTap) }
     }
     usleep(UInt32(max(holdMs, 0) * 1000))
     if let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) {
+        tagSynthetic(up)
         up.flags = flags
         if let c = char { keyboardSetUnicode(up, c) }
         if bg { postToPid(up, pid: pid) } else { up.post(tap: .cghidEventTap) }
@@ -82,6 +91,7 @@ func typeText(_ text: String, pid: Int32, bg: Bool) {
             var u = chunk
             guard let dn = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { continue }
+            tagSynthetic(dn); tagSynthetic(up)
             dn.keyboardSetUnicodeString(stringLength: u.count, unicodeString: &u)
             up.keyboardSetUnicodeString(stringLength: u.count, unicodeString: &u)
             if bg { postToPid(dn, pid: pid); postToPid(up, pid: pid) }
