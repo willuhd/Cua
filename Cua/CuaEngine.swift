@@ -75,12 +75,6 @@ final class CuaEngine {
                        hint: "End your turn or do work that does not use the desktop. Acquire a new lease after the foreground grant ends.",
                        extra: ["retryable": true, "suggested": "end_turn_or_non_desktop_work", "foreground": status])
     }
-    private func foregroundRequired() -> ToolFailure {
-        failure("FOREGROUND_REQUIRED",
-                "Global HID delivery is only available inside an approved foreground grant.",
-                hint: "Call request_foreground and ask the user to approve it, then retry.")
-    }
-
     // MARK: – target resolution
     func resolvePid(params: [String: Any]) -> Int32? {
         if let n = pInt(params, "pid") {
@@ -651,20 +645,14 @@ final class CuaEngine {
             return errorResult("BAD_ARGS", "pass x,y or at, or move the cursor first")
         }
         let foreground = s.scope == .foreground
-        let wantBG = params["bg"] as? Bool ?? true
-        if !foreground && !wantBG { return foregroundRequired().result }
-        let bg = foreground ? false : wantBG
-        let focus = foreground || (params["focus"] as? Bool ?? false)
+        let bg = !foreground
         let local = CGPoint(x: mapped.screen.x - target.bounds.minX, y: mapped.screen.y - target.bounds.minY)
         let group = Int64(Date().timeIntervalSince1970 * 1000) % 100000
         if foreground {
             warpCursor(to: mapped.screen)
             postMouseMoved(pid: s.pid, wid: target.wid, local: local, screen: mapped.screen, bg: false, group: group)
         } else {
-            let work = { postMouseMoved(pid: s.pid, wid: target.wid, local: local, screen: mapped.screen, bg: bg, group: group) }
-            if focus {
-                _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work)
-            } else { work() }
+            postMouseMoved(pid: s.pid, wid: target.wid, local: local, screen: mapped.screen, bg: bg, group: group)
         }
         usleep(80_000)
         SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(mapped.screen.x), y: Double(mapped.screen.y))
@@ -709,10 +697,7 @@ final class CuaEngine {
         case .failure(let f): return f.result
         }
         let foreground = s.scope == .foreground
-        let wantBG = params["bg"] as? Bool ?? true
-        if !foreground && !wantBG { return foregroundRequired().result }
-        let bg = foreground ? false : wantBG
-        let focus = foreground || (params["focus"] as? Bool ?? false)
+        let bg = !foreground
         let dbl = params["double"] as? Bool ?? false
         let right = params["right"] as? Bool ?? false
         let local = CGPoint(x: mapped.screen.x - target.bounds.minX, y: mapped.screen.y - target.bounds.minY)
@@ -738,11 +723,9 @@ final class CuaEngine {
                 if dbl && i == 0 { usleep(80_000) }
             }
         }
-        if foreground { send() }
-        else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, send) }
-        else { send() }
+        send()
         SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(mapped.screen.x), y: Double(mapped.screen.y))
-        var payload: [String: Any] = ["ok": true, "bg": bg, "scope": s.scope.rawValue,
+        var payload: [String: Any] = ["ok": true, "scope": s.scope.rawValue,
                                        "at": [Int(mapped.screen.x), Int(mapped.screen.y)],
                                        "wid": Int(target.wid), "pid": Int(s.pid), "coordSpace": space.rawValue]
         if foreground { payload["foreground"] = true }
@@ -758,20 +741,10 @@ final class CuaEngine {
         if let f = foregroundObservationFailure(s) { return f }
         guard let text = params["text"] as? String else { return errorResult("BAD_ARGS", "pass text") }
         let foreground = s.scope == .foreground
-        let wantBG = params["bg"] as? Bool ?? true
-        if !foreground && !wantBG { return foregroundRequired().result }
-        let bg = foreground ? false : wantBG
-        let focus = foreground || (params["focus"] as? Bool ?? (s.scope == .window))
-        let target: Target
-        switch resolveTarget(s, params, allowScreen: true) {
-        case .success(let t): target = t
-        case .failure(let f): return f.result
-        }
+        let bg = !foreground
         let work = { typeText(text, pid: s.pid, bg: bg) }
-        if foreground { work() }
-        else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work) }
-        else { work() }
-        var payload: [String: Any] = ["ok": true, "typed": text.count, "bg": bg, "scope": s.scope.rawValue]
+        work()
+        var payload: [String: Any] = ["ok": true, "typed": text.count, "scope": s.scope.rawValue]
         if foreground { payload["foreground"] = true }
         return toolResultText(jsonText(payload), structured: payload)
     }
@@ -785,10 +758,7 @@ final class CuaEngine {
         if let f = foregroundObservationFailure(s) { return f }
         guard let code = pUInt16(params, "code") else { return errorResult("BAD_ARGS", "pass a valid key code 0...65535") }
         let foreground = s.scope == .foreground
-        let wantBG = params["bg"] as? Bool ?? true
-        if !foreground && !wantBG { return foregroundRequired().result }
-        let bg = foreground ? false : wantBG
-        let focus = foreground || (params["focus"] as? Bool ?? (s.scope == .window))
+        let bg = !foreground
         let hold = clampInt(pInt(params, "holdMs"), 0, 10_000, bg ? 300 : 50)
         var flags: CGEventFlags = []
         if params["shift"] as? Bool ?? false { flags.insert(.maskShift) }
@@ -797,16 +767,9 @@ final class CuaEngine {
         if params["cmd"] as? Bool ?? false { flags.insert(.maskCommand) }
         if params["fn"] as? Bool ?? false { flags.insert(.maskSecondaryFn) }
         let chr = params["char"] as? String
-        let target: Target
-        switch resolveTarget(s, params, allowScreen: true) {
-        case .success(let t): target = t
-        case .failure(let f): return f.result
-        }
         let work = { postKey(code, pid: s.pid, bg: bg, holdMs: hold, flags: flags, char: chr) }
-        if foreground { work() }
-        else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work) }
-        else { work() }
-        var payload: [String: Any] = ["ok": true, "code": Int(code), "hold_ms": hold, "bg": bg]
+        work()
+        var payload: [String: Any] = ["ok": true, "code": Int(code), "hold_ms": hold]
         if let chr = chr { payload["char"] = chr }
         if foreground { payload["foreground"] = true }
         return toolResultText(jsonText(payload), structured: payload)
@@ -837,10 +800,7 @@ final class CuaEngine {
         let dx = pInt32(params, "dx") ?? 0
         let dy = pInt32(params, "dy") ?? 0
         let foreground = s.scope == .foreground
-        let wantBG = params["bg"] as? Bool ?? true
-        if !foreground && !wantBG { return foregroundRequired().result }
-        let bg = foreground ? false : wantBG
-        let focus = foreground || (params["focus"] as? Bool ?? false)
+        let bg = !foreground
         let local = CGPoint(x: mapped.screen.x - target.bounds.minX, y: mapped.screen.y - target.bounds.minY)
         let work = {
             guard let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
@@ -853,10 +813,9 @@ final class CuaEngine {
                 e.post(tap: .cghidEventTap)
             }
         }
-        if foreground { warpCursor(to: mapped.screen); work() }
-        else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work) }
-        else { work() }
-        var payload: [String: Any] = ["ok": true, "bg": bg, "dx": Int(dx), "dy": Int(dy),
+        if foreground { warpCursor(to: mapped.screen) }
+        work()
+        var payload: [String: Any] = ["ok": true, "dx": Int(dx), "dy": Int(dy),
                                        "at": [Int(mapped.screen.x), Int(mapped.screen.y)], "coordSpace": space.rawValue]
         if foreground { payload["foreground"] = true }
         return toolResultText(jsonText(payload), structured: payload)
@@ -901,10 +860,7 @@ final class CuaEngine {
         case .failure(let f): return f.result
         }
         let foreground = s.scope == .foreground
-        let wantBG = params["bg"] as? Bool ?? true
-        if !foreground && !wantBG { return foregroundRequired().result }
-        let bg = foreground ? false : wantBG
-        let focus = foreground || (params["focus"] as? Bool ?? false)
+        let bg = !foreground
         let steps = clampInt(pInt(params, "steps"), 1, 120, 12)
         let stepMs = clampInt(pInt(params, "stepMs"), 1, 200, 15)
         let startHold = clampInt(pInt(params, "startHoldMs"), 0, 2000, 0)
@@ -936,11 +892,9 @@ final class CuaEngine {
             if endHold > 0 { usleep(UInt32(endHold * 1000)) }
             if let u = event(.leftMouseUp, to.screen) { send(u) }
         }
-        if foreground { work() }
-        else if focus { _ = driveWithFocus(true, pid: s.pid, wid: target.wid, work) }
-        else { work() }
+        work()
         SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(to.screen.x), y: Double(to.screen.y))
-        var payload: [String: Any] = ["ok": true, "bg": bg, "steps": steps,
+        var payload: [String: Any] = ["ok": true, "steps": steps,
                                        "from": [Int(from.screen.x), Int(from.screen.y)],
                                        "to": [Int(to.screen.x), Int(to.screen.y)],
                                        "coordSpace": space.rawValue]
