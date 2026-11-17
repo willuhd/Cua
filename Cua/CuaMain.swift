@@ -8,7 +8,7 @@
 // window leases may coexist. Every action carries the lease id. Rejected/held
 // calls return LEASE_HELD or INVALID_ID with a user-facing hint.
 //
-// Coordinates: each lease declares image | norm1000 | norm1 | screen; all
+// Coordinates: each lease declares image | norm1000 | screen; all
 // spatial tools inherit it. Screenshots return geometry and cache the full-res
 // source for zoom crops.
 //

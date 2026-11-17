@@ -209,19 +209,12 @@ final class CuaEngine {
         case .norm1000:
             guard x >= 0, x <= 1000, y >= 0, y <= 1000 else {
                 return .failure(failure("BAD_COORDS", "norm1000 coordinates must be in 0...1000",
-                                        hint: "Use coordSpace:'image' for pixels or coordSpace:'norm1' for 0...1."))
+                                        hint: "Use coordSpace:'image' for pixels or coordSpace:'screen' for absolute points."))
             }
             let nx = x / 1000.0, ny = y / 1000.0
             return .success(MappedPoint(screen: CGPoint(x: target.bounds.minX + nx * target.bounds.width,
                                                         y: target.bounds.minY + ny * target.bounds.height),
                                         normalized: CGPoint(x: nx, y: ny)))
-        case .norm1:
-            guard x >= 0, x <= 1, y >= 0, y <= 1 else {
-                return .failure(failure("BAD_COORDS", "norm1 coordinates must be in 0...1"))
-            }
-            return .success(MappedPoint(screen: CGPoint(x: target.bounds.minX + x * target.bounds.width,
-                                                        y: target.bounds.minY + y * target.bounds.height),
-                                        normalized: CGPoint(x: x, y: y)))
         case .image:
             guard let snap = SnapshotStore.shared.get(sessionID: s.id, wid: target.wid) else {
                 return .failure(failure("NO_SNAPSHOT", "image coordinates need a prior screenshot for this window",
@@ -401,7 +394,7 @@ final class CuaEngine {
         }
         let spaceRaw = pString(params, "coordSpace") ?? CoordSpace.norm1000.rawValue
         guard let space = CoordSpace(rawValue: spaceRaw) else {
-            return errorResult("BAD_ARGS", "coordSpace must be image, norm1000, norm1, or screen")
+            return errorResult("BAD_ARGS", "coordSpace must be image, norm1000, or screen")
         }
         if scope == .window && space == .screen {
             return errorResult("BAD_ARGS", "window leases cannot use screen coordinates")
@@ -469,23 +462,20 @@ final class CuaEngine {
         case .success(let r): region = r
         case .failure(let f): return f.result
         }
-        let clean = params["clean"] as? Bool ?? false
-        let grid = clean ? 0 : clampInt(pInt(params, "grid"), 0, 1000, 0)
-        let maxDim = clampInt(pInt(params, "maxDimension"), 64, 8000, 1600)
+        let grid = clampInt(pInt(params, "grid"), 0, 1000, 0)
+        let maxDim = clampInt(pInt(params, "maxDimension"), 64, 2560, 2560)
         var cursor: CGPoint? = nil
-        if !clean {
-            if let raw = pString(params, "cursor") {
-                if raw == "last" || raw == "show" {
-                    if let c = SessionStore.shared.lastCursor(sessionID: s.id, wid: target.wid) {
-                        cursor = CGPoint(x: c.0, y: c.1)
-                    }
-                } else {
-                    let pair = raw.split(separator: ",")
-                    if pair.count == 2, let x = Double(pair[0].trimmingCharacters(in: .whitespaces)),
-                       let y = Double(pair[1].trimmingCharacters(in: .whitespaces)),
-                       let mapped = try? mapPoint(s, target: target, x: x, y: y, space: space).get() {
-                        cursor = mapped.screen
-                    }
+        if let raw = pString(params, "cursor") {
+            if raw == "last" || raw == "show" {
+                if let c = SessionStore.shared.lastCursor(sessionID: s.id, wid: target.wid) {
+                    cursor = CGPoint(x: c.0, y: c.1)
+                }
+            } else {
+                let pair = raw.split(separator: ",")
+                if pair.count == 2, let x = Double(pair[0].trimmingCharacters(in: .whitespaces)),
+                   let y = Double(pair[1].trimmingCharacters(in: .whitespaces)),
+                   let mapped = try? mapPoint(s, target: target, x: x, y: y, space: space).get() {
+                    cursor = mapped.screen
                 }
             }
         }
@@ -504,8 +494,14 @@ final class CuaEngine {
         return toolResultImage(png: data, caption: caption, structured: payload)
     }
 
-    private func sourceForZoom(_ s: Session, target: Target, fresh: Bool) -> CGImage? {
-        if !fresh, let snap = SnapshotStore.shared.get(sessionID: s.id, wid: target.wid) { return snap.source }
+    private func sourceForZoom(_ s: Session, target: Target) -> CGImage? {
+        if s.scope == .foreground {
+            let observation = ForegroundCoordinator.shared.observationStatus()
+            if observation.needsScreenshot || observation.dirty {
+                return target.wid == 0 ? captureScreenImage() : captureWindowImage(wid: target.wid)
+            }
+        }
+        if let snap = SnapshotStore.shared.get(sessionID: s.id, wid: target.wid) { return snap.source }
         return target.wid == 0 ? captureScreenImage() : captureWindowImage(wid: target.wid)
     }
 
@@ -544,12 +540,11 @@ final class CuaEngine {
         }
         var region = CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
         region = region.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
-        let fresh = params["fresh"] as? Bool ?? false
-        guard let source = sourceForZoom(s, target: target, fresh: fresh) else {
+        guard let source = sourceForZoom(s, target: target) else {
             return errorResult("CAPTURE_FAILED", "could not capture the window",
                                extra: ["hint": "Grant Screen Recording to Cua."])
         }
-        let maxDim = clampInt(pInt(params, "maxDimension"), 64, 4000, 768)
+        let maxDim = clampInt(pInt(params, "maxDimension"), 64, 2560, 2560)
         guard let rendered = renderSnapshot(source: source, windowBounds: target.bounds, region: region,
                                              maxDimension: maxDim, grid: 0, cursor: nil,
                                              coordSpace: space),
@@ -596,7 +591,7 @@ final class CuaEngine {
         SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(mapped.screen.x), y: Double(mapped.screen.y))
         let grid = clampInt(pInt(params, "grid"), 0, 1000, 0)
         let captured = captureSnapshot(s, target: target, region: CGRect(x: 0, y: 0, width: 1, height: 1),
-                                       maxDimension: 1600, grid: grid,
+                                       maxDimension: 2560, grid: grid,
                                        cursor: (Double(mapped.screen.x), Double(mapped.screen.y)),
                                        space: space)
         let snap: Snapshot, data: Data
@@ -653,7 +648,7 @@ final class CuaEngine {
         SessionStore.shared.saveCursor(sessionID: s.id, wid: target.wid, x: Double(mapped.screen.x), y: Double(mapped.screen.y))
         let grid = clampInt(pInt(params, "grid"), 0, 1000, 0)
         let captured = captureSnapshot(s, target: target, region: CGRect(x: 0, y: 0, width: 1, height: 1),
-                                       maxDimension: 1600, grid: grid,
+                                       maxDimension: 2560, grid: grid,
                                        cursor: (Double(mapped.screen.x), Double(mapped.screen.y)),
                                        space: space)
         let snap: Snapshot, data: Data
@@ -980,7 +975,7 @@ final class CuaEngine {
         }
         let spaceRaw = pString(params, "coordSpace") ?? CoordSpace.screen.rawValue
         guard let space = CoordSpace(rawValue: spaceRaw) else {
-            return errorResult("BAD_ARGS", "coordSpace must be image, norm1000, norm1, or screen")
+            return errorResult("BAD_ARGS", "coordSpace must be image, norm1000, or screen")
         }
         let reason = String((pString(params, "reason") ?? "Full control requested").prefix(160))
         let agent = pString(params, "agent") ?? "agent"

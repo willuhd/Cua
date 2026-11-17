@@ -17,7 +17,6 @@ enum LeaseScope: String {
 enum CoordSpace: String {
     case image
     case norm1000
-    case norm1
     case screen
 }
 

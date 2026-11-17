@@ -226,9 +226,6 @@ func renderSnapshot(source: CGImage, windowBounds: CGRect, region rawRegion: CGR
         case .norm1000:
             if axis == 0 { return String(Int(((value - windowBounds.minX) / windowBounds.width * 1000).rounded())) }
             return String(Int(((value - windowBounds.minY) / windowBounds.height * 1000).rounded()))
-        case .norm1:
-            if axis == 0 { return String(format: "%.2f", (value - windowBounds.minX) / windowBounds.width) }
-            return String(format: "%.2f", (value - windowBounds.minY) / windowBounds.height)
         case .image:
             if axis == 0 { return String(Int(((value - windowBounds.minX) / windowBounds.width * CGFloat(outW)).rounded())) }
             return String(Int(((value - windowBounds.minY) / windowBounds.height * CGFloat(outH)).rounded()))
