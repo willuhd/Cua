@@ -103,7 +103,6 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
         preferredContentSize = NSSize(width: 360, height: 360)
         webView.navigationDelegate = self
         webView.load(URLRequest(url: url()))
-        probe()
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -141,14 +140,6 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
         permDrag?.isHidden = false
     }
 
-    func probe() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-            guard let w = self?.webView else { return }
-            w.evaluateJavaScript("document.body ? document.body.innerText.length : -1") { v, _ in clog("webview probe body=\(v ?? "nil") url=\(w.url?.absoluteString ?? "nil") loading=\(w.isLoading)") }
-        }
-    }
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) { clog("webview start") }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { clog("webview finish"); probe() }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { clog("webview fail: \(error.localizedDescription)") }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { clog("webview provisional fail: \(error.localizedDescription)") }
     func updateTable() {
@@ -164,9 +155,5 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
         } else {
             webView.load(URLRequest(url: url()))
         }
-    }
-    func reload() {
-        guard isViewLoaded else { return }
-        webView.load(URLRequest(url: url()))
     }
 }

@@ -94,7 +94,6 @@ final class CuaEngine {
         switch e {
         case .held(let s): return leaseHeldResult(s)
         case .invalidId(let reason): return invalidIdResult(reason)
-        case .unknownApp(let m): return errorResult("UNKNOWN_APP", m)
         case .badRequest(let m): return errorResult("BAD_ARGS", m)
         }
     }

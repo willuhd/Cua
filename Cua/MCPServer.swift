@@ -24,7 +24,6 @@ func toolResultImage(png: Data, caption: String, structured: [String: Any]? = ni
     ]
     var r: [String: Any] = ["content": content, "isError": false]
     if let structured = structured { r["structuredContent"] = structured }
-    _ = content
     return r
 }
 // MARK: - MCP tool definitions (served by tools/list)
@@ -396,7 +395,8 @@ final class MCPServer: NSObject {
         return value
     }
 
-    static func iconBase64(pid: Int32) -> String {        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid }),
+    static func iconBase64(pid: Int32) -> String {
+        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid }),
               let icon = app.icon else { return "" }
         let size = 40
         let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
@@ -594,7 +594,7 @@ final class MCPServer: NSObject {
     }
     func handleRPC(method: String, params: [String: Any], headers: [String: String]) -> ([String: Any]?, String?) {
         // Return session id for initialize; otherwise echo provided one (stateless tolerance)
-        let incomingSession = headers["mcp-session-id"] ?? headers["mcp-session-id".lowercased()]
+        let incomingSession = headers["mcp-session-id"]
         switch method {
         case "initialize":
             let sid = UUID().uuidString

@@ -34,7 +34,7 @@ struct CuaMain {
         let app = NSApplication.shared
         let d = AppDelegate()
         app.delegate = d
-        // Keep the delegate alive for the runloop (NSApplicationMain retains it via delegate property)
+        // The delegate property is weak; this local keeps it alive for the run loop.
         _ = d
         app.run()
     }

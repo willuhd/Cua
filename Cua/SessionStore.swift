@@ -41,7 +41,6 @@ final class SessionStore {
     enum LeaseError: Error {
         case held(Session)
         case invalidId(reason: String)
-        case unknownApp(String)
         case badRequest(String)
     }
 

@@ -49,11 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.popover.contentSize = NSSize(width: 360, height: h)
         }
 
-        // Ask for permissions on first launch (no-ops if already granted)
-        if !AXIsProcessTrusted() {
-            // Don't spam prompt every launch; only if missing, show popover note.
-            // Grant button in popover fires the real prompt.
-        }
+        // Permissions are prompted from the popover's grant button, never on launch.
         let refreshUI = { [weak self] in
             DispatchQueue.main.async { self?.popVC.updateTable() }
         }
