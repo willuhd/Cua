@@ -227,8 +227,10 @@ final class ForegroundCoordinator {
             throw ForegroundRequestError.timeout
         }
 
+        // Only clear our own request: a deny wakes us, and a new request can
+        // already be pending by the time this waiter runs again.
         lock.lock()
-        pending = nil
+        if pending?.requestId == p.requestId { pending = nil }
         lock.unlock()
         switch box.result {
         case .success(let v): return v
