@@ -253,8 +253,9 @@ function renderForeground(s){
     const allow = el('button', null, 'End all background & allow'); allow.type = 'button';
     allow.onclick = async () => {
       allow.disabled = true; allow.textContent = 'Waiting for gesture…';
-      try { await postJSON('/api/foreground', {action:'approve', requestId:fg.requestId}); }
-      finally { if (allow.isConnected) { allow.disabled = false; allow.textContent = 'End all background & allow'; } }
+      let ok = false;
+      try { ok = (await postJSON('/api/foreground', {action:'approve', requestId:fg.requestId})).ok; } catch (e) {}
+      if (!ok && allow.isConnected) { allow.disabled = false; allow.textContent = 'End all background & allow'; }
       refresh();
     };
     const deny = el('button', null, 'Deny'); deny.type = 'button';
