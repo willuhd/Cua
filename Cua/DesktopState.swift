@@ -80,21 +80,11 @@ final class InputGate {
     private let condition = NSCondition()
     private var busy = false
 
-    private func acquire(until deadline: Date?) -> Bool {
+    private func acquire() {
         condition.lock()
-        while busy {
-            if let deadline = deadline {
-                if !condition.wait(until: deadline) {
-                    condition.unlock()
-                    return false
-                }
-            } else {
-                condition.wait()
-            }
-        }
+        while busy { condition.wait() }
         busy = true
         condition.unlock()
-        return true
     }
 
     private func release() {
@@ -110,14 +100,7 @@ final class InputGate {
     }
 
     func withLock<T>(_ body: () -> T) -> T {
-        _ = acquire(until: nil)
-        defer { release() }
-        return body()
-    }
-
-    /// Take the gate only if the current gesture finishes within the timeout.
-    func withLockIfIdle<T>(timeout: TimeInterval, _ body: () -> T) -> T? {
-        guard acquire(until: Date().addingTimeInterval(timeout)) else { return nil }
+        acquire()
         defer { release() }
         return body()
     }
@@ -130,6 +113,16 @@ final class HumanInputMonitor {
     private var monitor: Any?
 
     func start() {
+        // Approval arrives on an HTTP worker; NSEvent monitors are installed
+        // and removed on the main thread.
+        DispatchQueue.main.async { [weak self] in self?.install() }
+    }
+
+    func stop() {
+        DispatchQueue.main.async { [weak self] in self?.remove() }
+    }
+
+    private func install() {
         guard monitor == nil else { return }
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown,
                                                                .rightMouseDown, .otherMouseDown,
@@ -144,7 +137,7 @@ final class HumanInputMonitor {
         }
     }
 
-    func stop() {
+    private func remove() {
         if let monitor = monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
@@ -257,31 +250,33 @@ final class ForegroundCoordinator {
         }
         lock.unlock()
 
-        // Hard preemption: take the input gate, clear cached state from every
-        // background lease, and create the one global foreground lease.
-        guard let session = InputGate.shared.withLockIfIdle(timeout: 5, {
+        // Hard preemption: wait for the current gesture, clear cached state from
+        // every background lease, and create the one global foreground lease.
+        // The commit happens under the gate and under one lock, so nothing can
+        // acquire a background lease between the revoke and the grant, and a
+        // request that expired while we waited cannot hand out an unheld grant.
+        let committed: Active? = InputGate.shared.withLock {
+            lock.lock()
+            guard pending?.requestId == p.requestId else {
+                lock.unlock()
+                return nil
+            }
             SnapshotStore.shared.removeAll()
             AXIndexStore.shared.removeAll()
-            return SessionStore.shared.acquireForeground(coordSpace: p.coordSpace,
-                                                         agent: p.agent)
-        }) else {
-            p.box.result = .failure(.busy)
-            p.semaphore.signal()
-            lock.lock(); if pending?.requestId == p.requestId { pending = nil }; lock.unlock()
-            onChange?()
-            return .busy
+            let session = SessionStore.shared.acquireForeground(coordSpace: p.coordSpace,
+                                                                agent: p.agent)
+            let a = Active(requestId: p.requestId, sessionID: session.id,
+                           agent: p.agent, startedAt: Date())
+            humanEpoch = 0
+            observedEpoch = 0
+            hasObservation = false
+            active = a
+            p.box.result = .success(session.id)
+            pending = nil
+            lock.unlock()
+            return a
         }
-        let a = Active(requestId: p.requestId, sessionID: session.id,
-                       agent: p.agent, startedAt: Date())
-
-        lock.lock()
-        humanEpoch = 0
-        observedEpoch = 0
-        hasObservation = false
-        active = a
-        p.box.result = .success(session.id)
-        pending = nil
-        lock.unlock()
+        guard committed != nil else { return .notActive }
         HumanInputMonitor.shared.start()
         p.semaphore.signal()
         onChange?()

@@ -251,7 +251,12 @@ function renderForeground(s){
     }
     const actions = el('div','actions');
     const allow = el('button', null, 'End all background & allow'); allow.type = 'button';
-    allow.onclick = async () => { await postJSON('/api/foreground', {action:'approve', requestId:fg.requestId}); refresh(); };
+    allow.onclick = async () => {
+      allow.disabled = true; allow.textContent = 'Waiting for gesture…';
+      try { await postJSON('/api/foreground', {action:'approve', requestId:fg.requestId}); }
+      finally { if (allow.isConnected) { allow.disabled = false; allow.textContent = 'End all background & allow'; } }
+      refresh();
+    };
     const deny = el('button', null, 'Deny'); deny.type = 'button';
     deny.onclick = async () => { await postJSON('/api/foreground', {action:'deny', requestId:fg.requestId}); refresh(); };
     if (!window.__CUA_UI_TOKEN) { allow.disabled = true; deny.disabled = true; }
