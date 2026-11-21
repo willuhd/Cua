@@ -94,11 +94,6 @@ final class InputGate {
         condition.unlock()
     }
 
-    var isHeld: Bool {
-        condition.lock(); defer { condition.unlock() }
-        return busy
-    }
-
     func withLock<T>(_ body: () -> T) -> T {
         acquire()
         defer { release() }
@@ -128,11 +123,10 @@ final class HumanInputMonitor {
                                                                .rightMouseDown, .otherMouseDown,
                                                                .scrollWheel, .keyDown]) { event in
             guard ForegroundCoordinator.shared.isActive else { return }
-            if let cg = event.cgEvent {
-                if cg.getIntegerValueField(.eventSourceUserData) == cuaSyntheticEventTag { return }
-            } else if InputGate.shared.isHeld {
-                return
-            }
+            // Only events this app tagged are ours. Anything else is human,
+            // including an event that arrives without a CGEvent.
+            if let cg = event.cgEvent,
+               cg.getIntegerValueField(.eventSourceUserData) == cuaSyntheticEventTag { return }
             ForegroundCoordinator.shared.noteHumanInput()
         }
     }
