@@ -15,6 +15,10 @@ struct ToolFailure: Error {
 final class CuaEngine {
     static let shared = CuaEngine()
 
+    /// type posts one keyboard event per character while holding the global
+    /// input gate, so the string is bounded like every other walk or payload.
+    private let maxTypedCharacters = 4_096
+
     // MARK: – parameter parsing (never trap on hostile JSON numbers)
     private func number(_ v: Any?) -> Double? {
         if let n = v as? NSNumber { return n.doubleValue }
@@ -732,6 +736,9 @@ final class CuaEngine {
         }
         if let f = foregroundObservationFailure(s) { return f }
         guard let text = params["text"] as? String else { return errorResult("BAD_ARGS", "pass text") }
+        guard text.count <= maxTypedCharacters else {
+            return errorResult("BAD_ARGS", "text is limited to \(maxTypedCharacters) characters per call; split it")
+        }
         let foreground = s.scope == .foreground
         let bg = !foreground
         let work = { typeText(text, pid: s.pid, bg: bg) }
