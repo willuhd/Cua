@@ -8,6 +8,11 @@ import WebKit
 import Darwin
 
 // MARK: – session store (in-memory only: leases + cursors)
+
+/// 8 lowercase hex characters. Not cryptographic: short enough to read in a
+/// menubar row and to type as an acquisitionId.
+func shortID() -> String { String(UUID().uuidString.prefix(8).lowercased()) }
+
 enum LeaseScope: String {
     case app
     case window
@@ -44,12 +49,10 @@ final class SessionStore {
         case badRequest(String)
     }
 
-    func makeShortId() -> String { String(UUID().uuidString.prefix(8).lowercased()) }
-
     private func newSession(pid: Int32, scope: LeaseScope, wid: UInt32?, coordSpace: CoordSpace, agent: String?) -> Session {
         let name = pid == 0 ? "This Mac" : appNameForPid(pid)
         let bid = pid == 0 ? "?" : (NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid })?.bundleIdentifier ?? "?")
-        return Session(id: makeShortId(), pid: pid, agent: agent, appName: name, bid: bid,
+        return Session(id: shortID(), pid: pid, agent: agent, appName: name, bid: bid,
                        scope: scope, wid: wid, coordSpace: coordSpace,
                        windowTitle: wid.flatMap { windowTitle(wid: $0) })
     }

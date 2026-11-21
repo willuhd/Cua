@@ -312,7 +312,7 @@ final class CuaEngine {
         guard let data = pngData(from: rendered.image) else {
             return .failure(failure("PNG_FAILED", "could not encode the screenshot"))
         }
-        let snap = Snapshot(id: UUID().uuidString.prefix(8).lowercased(), sessionID: s.id, wid: target.wid,
+        let snap = Snapshot(id: shortID(), sessionID: s.id, wid: target.wid,
                             source: source, windowBounds: target.bounds, region: region,
                             imageWidth: rendered.width, imageHeight: rendered.height,
                             coordSpace: coord, capturedAt: Date())
@@ -555,7 +555,7 @@ final class CuaEngine {
               let data = pngData(from: rendered.image) else {
             return errorResult("RENDER_FAILED", "could not render zoom")
         }
-        let snap = Snapshot(id: UUID().uuidString.prefix(8).lowercased(), sessionID: s.id, wid: target.wid,
+        let snap = Snapshot(id: shortID(), sessionID: s.id, wid: target.wid,
                             source: source, windowBounds: target.bounds, region: region,
                             imageWidth: rendered.width, imageHeight: rendered.height,
                             coordSpace: space, capturedAt: Date())

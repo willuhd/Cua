@@ -191,7 +191,7 @@ final class ForegroundCoordinator {
 
     func request(agent: String, reason: String,
                  coordSpace: CoordSpace) throws -> String {
-        let requestId = UUID().uuidString.prefix(8).lowercased()
+        let requestId = shortID()
         let semaphore = DispatchSemaphore(value: 0)
         let box = PendingResult()
         lock.lock()
@@ -202,7 +202,7 @@ final class ForegroundCoordinator {
         humanEpoch = 0
         observedEpoch = 0
         hasObservation = false
-        let p = Pending(requestId: String(requestId), agent: agent, reason: reason,
+        let p = Pending(requestId: requestId, agent: agent, reason: reason,
                         requestedAt: Date(), coordSpace: coordSpace, box: box, semaphore: semaphore)
         pending = p
         lock.unlock()
