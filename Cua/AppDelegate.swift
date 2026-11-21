@@ -1,11 +1,4 @@
 import Cocoa
-import ApplicationServices
-import CoreGraphics
-import ImageIO
-import UniformTypeIdentifiers
-import Network
-import WebKit
-import Darwin
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!

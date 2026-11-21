@@ -1,11 +1,4 @@
-import Cocoa
-import ApplicationServices
-import CoreGraphics
-import ImageIO
-import UniformTypeIdentifiers
-import Network
-import WebKit
-import Darwin
+import Foundation
 
 // MARK: – logging (no disk, just stderr/console)
 func clog(_ s: String) { NSLog("cua: %@", s) }

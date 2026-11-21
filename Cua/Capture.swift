@@ -1,11 +1,7 @@
 import Cocoa
-import ApplicationServices
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
-import Network
-import WebKit
-import Darwin
 import ScreenCaptureKit
 
 // MARK: – in-memory screenshots (no /tmp, no screencapture file)

@@ -1,11 +1,5 @@
 import Cocoa
-import ApplicationServices
 import CoreGraphics
-import ImageIO
-import UniformTypeIdentifiers
-import Network
-import WebKit
-import Darwin
 
 // MARK: – window/app helpers (same as CLI)
 func runningApps() -> [[String:Any]] {

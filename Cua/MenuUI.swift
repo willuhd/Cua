@@ -1,11 +1,5 @@
 import Cocoa
-import ApplicationServices
-import CoreGraphics
-import ImageIO
-import UniformTypeIdentifiers
-import Network
 import WebKit
-import Darwin
 
 // MARK: - web UI (src/index.html, transparent over native glass)
 // Single source of truth is src/index.html. At runtime try, in order:

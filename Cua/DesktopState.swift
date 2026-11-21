@@ -1,11 +1,5 @@
 import Cocoa
-import ApplicationServices
 import CoreGraphics
-import ImageIO
-import UniformTypeIdentifiers
-import Network
-import WebKit
-import Darwin
 
 // MARK: – snapshot cache (last full-resolution capture per lease/window)
 struct Snapshot {

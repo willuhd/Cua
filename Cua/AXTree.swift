@@ -1,11 +1,5 @@
-import Cocoa
 import ApplicationServices
 import CoreGraphics
-import ImageIO
-import UniformTypeIdentifiers
-import Network
-import WebKit
-import Darwin
 
 // MARK: – AX (same walk as the original CLI, scoped per lease)
 struct AXNode { var idx: Int; var role: String; var title: String; var pos: CGPoint?; var size: CGSize?; var actions: [String]; var ref: AXUIElement }

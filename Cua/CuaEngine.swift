@@ -1,11 +1,5 @@
-import Cocoa
 import ApplicationServices
 import CoreGraphics
-import ImageIO
-import UniformTypeIdentifiers
-import Network
-import WebKit
-import Darwin
 
 // MARK: – Cua engine (tool call bodies; all in-memory)
 struct ToolFailure: Error {
