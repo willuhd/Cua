@@ -439,8 +439,7 @@ final class CuaEngine {
         } else {
             _ = SessionStore.shared.release(id: session.id)
         }
-        SnapshotStore.shared.remove(sessionID: session.id)
-        AXIndexStore.shared.remove(sessionID: session.id)
+        dropSessionCaches(session.id)
         return toolResultText("{\"ok\":true}")
     }
 

@@ -462,8 +462,7 @@ final class MCPServer: NSObject {
                     let hadForeground = victims.contains { $0.scope == .foreground }
                     SessionStore.shared.free(pid: p32, wid: w32)
                     for s in victims {
-                        SnapshotStore.shared.remove(sessionID: s.id)
-                        AXIndexStore.shared.remove(sessionID: s.id)
+                        dropSessionCaches(s.id)
                         self.dropLeaseQueue(s.id)
                     }
                     if hadForeground { ForegroundCoordinator.shared.stop() }

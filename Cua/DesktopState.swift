@@ -74,6 +74,13 @@ final class SnapshotStore {
     }
 }
 
+/// Everything a lease cached is keyed by its id and lives in two stores;
+/// dropping a lease drops both, so no caller can free half of it.
+func dropSessionCaches(_ sessionID: String) {
+    SnapshotStore.shared.remove(sessionID: sessionID)
+    AXIndexStore.shared.remove(sessionID: sessionID)
+}
+
 // MARK: – global input admission
 final class InputGate {
     static let shared = InputGate()
@@ -362,8 +369,7 @@ final class ForegroundCoordinator {
 
     private func teardown(_ a: Active) {
         SessionStore.shared.remove(id: a.sessionID)
-        SnapshotStore.shared.remove(sessionID: a.sessionID)
-        AXIndexStore.shared.remove(sessionID: a.sessionID)
+        dropSessionCaches(a.sessionID)
     }
 
 }
