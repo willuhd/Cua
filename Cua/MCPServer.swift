@@ -2,6 +2,9 @@ import Cocoa
 import Darwin
 
 // MARK: - MCP helpers (JSON-RPC over HTTP)
+/// The version an MCP client sees is the app version. There is no second
+/// number to keep in sync with Info.plist.
+let cuaVersion: String = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0"
 func jsonData(_ obj: [String: Any]) -> Data {
     (try? JSONSerialization.data(withJSONObject: obj, options: [.withoutEscapingSlashes])) ?? Data()
 }
@@ -593,7 +596,7 @@ final class MCPServer: NSObject {
             let sid = UUID().uuidString
             let result: [String: Any] = [
                 "protocolVersion": "2025-06-18",
-                "serverInfo": ["name": "cua-mcp", "version": "1.1"],
+                "serverInfo": ["name": "cua-mcp", "version": cuaVersion],
                 "capabilities": ["tools": ["listChanged": false]],
                 "instructions": "Cua controls apps through leases. Workflow: list_apps -> acquire (scope app or window) -> windows/screenshot -> act -> release. Coordinates use the lease coordSpace (norm1000 by default): norm1000 is 0..1000 relative to the target window screenshot; image is pixels in the last screenshot/zoom; screen is absolute points for app and foreground leases. Call screenshot before acting in foreground; after human input, take a new screenshot. Use zoom for small UI, hover to trigger hover states. Foreground input tools return SCREENSHOT_REQUIRED before the first screenshot and STALE_OBSERVATION after human input. Background leases post events to the app process and never move the user's pointer; foreground grants use the real HID path. request_foreground grants full-Mac control; background and foreground leases are mutually exclusive. If LEASE_HELD or GLOBAL_FOREGROUND_ACTIVE, stop or ask the user; do not retry in a loop."
             ]
