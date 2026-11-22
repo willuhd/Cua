@@ -1,7 +1,7 @@
 import ApplicationServices
 import CoreGraphics
 
-// MARK: – AX (same walk as the original CLI, scoped per lease)
+// MARK: – AX (positional walk, scoped per lease)
 struct AXNode { var idx: Int; var role: String; var title: String; var pos: CGPoint?; var size: CGSize?; var actions: [String]; var ref: AXUIElement }
 
 final class AXIndexStore {

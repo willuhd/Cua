@@ -2,7 +2,7 @@ import ApplicationServices
 import CoreGraphics
 import Darwin
 
-// MARK: – SkyLight private SPI (same as CLI)
+// MARK: – SkyLight private SPI
 final class Sky {
     static let shared = Sky()
     var SLEventPostToPid: (@convention(c) (Int32, CGEvent) -> Int32)?

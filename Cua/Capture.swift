@@ -6,8 +6,8 @@ import ScreenCaptureKit
 
 // MARK: – in-memory screenshots (no /tmp, no screencapture file)
 // ScreenCaptureKit (SCScreenshotManager, macOS 14+) captures a window directly
-// to a CGImage. The old screencapture+file hop existed only because the CLI had
-// to hand bytes to a shell; a menubar process can keep the CGImage/Data in RAM.
+// to a CGImage, so nothing has to be written out and read back: the menubar
+// process keeps the CGImage and its PNG in RAM.
 // No Process spawn, no ImageSource-from-file, no CGImageDestination-to-file.
 func pngData(from image: CGImage) -> Data? {
     let data = NSMutableData()

@@ -1,7 +1,7 @@
 import Cocoa
 import CoreGraphics
 
-// MARK: – window/app helpers (same as CLI)
+// MARK: – window/app helpers
 func runningApps() -> [[String:Any]] {
     var out: [[String:Any]] = []
     for a in NSWorkspace.shared.runningApplications {

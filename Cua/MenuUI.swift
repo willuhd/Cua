@@ -1,9 +1,9 @@
 import Cocoa
 import WebKit
 
-// MARK: - web UI (src/index.html, transparent over native glass)
-// Single source of truth is src/index.html. At runtime try, in order:
-// bundle resource (Contents/Resources/index.html), then src/index.html next to
+// MARK: - web UI (Cua/index.html, transparent over native glass)
+// Single source of truth is Cua/index.html, copied into the bundle as a
+// resource. At runtime try, in order: the bundled copy, then the file beside
 // the sources (#filePath, dev), then a minimal fallback so the server never
 // returns an empty page.
 let webUIHTML: String = {
@@ -12,7 +12,7 @@ let webUIHTML: String = {
        let s = try? String(contentsOfFile: path, encoding: .utf8) {
         return s
     }
-    // 2) dev: src/index.html beside this file (ad-hoc personal build)
+    // 2) dev: index.html beside this file (ad-hoc personal build)
     let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     let candidate = here.appendingPathComponent("index.html")
     if let s = try? String(contentsOf: candidate, encoding: .utf8) {
