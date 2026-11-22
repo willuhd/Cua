@@ -449,13 +449,22 @@ final class MCPServer: NSObject {
                 if let title = s.windowTitle { d["windowTitle"] = title }
                 return d
             }
-            // One entry per app the menubar lists, so the free button always has
-            // a pid to work with even when the lease it names is already gone.
+            // One row per app. The row addresses the pid, so Stop drops every
+            // lease that app holds; the token shown is the app lease's, or the
+            // first window lease's when the app was taken window by window.
             var apps: [[String: Any]] = []
             var seen = Set<Int32>()
-            for s in SessionStore.shared.sessions() where s.scope != .foreground && !seen.contains(s.pid) {
+            for s in SessionStore.shared.sessions() where s.scope != .foreground {
+                if seen.contains(s.pid) {
+                    if s.scope != .app { continue }
+                    if let i = apps.firstIndex(where: { ($0["pid"] as? Int) == Int(s.pid) }) {
+                        apps[i]["token"] = s.token
+                    }
+                    continue
+                }
                 seen.insert(s.pid)
-                var a: [String: Any] = ["pid": Int(s.pid), "app": s.appName, "icon": iconBase64Cached(pid: s.pid)]
+                var a: [String: Any] = ["pid": Int(s.pid), "app": s.appName,
+                                        "icon": iconBase64Cached(pid: s.pid), "token": s.token]
                 if let touched = SessionStore.shared.lastActivity(pid: s.pid) {
                     a["lastActivity"] = Int(touched.timeIntervalSince1970 * 1000)
                 }
