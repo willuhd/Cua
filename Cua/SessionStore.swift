@@ -38,6 +38,8 @@ final class SessionStore {
     static let shared = SessionStore()
     private var lock = NSLock()
     private var byId: [String: Session] = [:]
+    /// token -> lease id, so a presented token resolves without scanning.
+    private var byToken: [String: String] = [:]
     private var cursors: [String: (Double, Double)] = [:]  // "session:wid" + "last:session"
     /// Last time a call touched this pid, kept after the lease is gone so the
     /// menubar can still say how long ago the app was used.
@@ -76,6 +78,7 @@ final class SessionStore {
         }
         let s = newSession(pid: pid, scope: scope, wid: (scope == .app ? nil : wid), coordSpace: coordSpace, agent: agent)
         byId[s.id] = s
+        byToken[s.token.lowercased()] = s.id
         return .success(s)
     }
 
@@ -85,9 +88,11 @@ final class SessionStore {
     func acquireForeground(coordSpace: CoordSpace, agent: String?) -> Session {
         lock.lock(); defer { lock.unlock() }
         byId.removeAll()
+        byToken.removeAll()
         cursors.removeAll()
         let s = newSession(pid: 0, scope: .foreground, wid: nil, coordSpace: coordSpace, agent: agent)
         byId[s.id] = s
+        byToken[s.token.lowercased()] = s.id
         return s
     }
 
@@ -101,16 +106,16 @@ final class SessionStore {
 
     func validate(id: String) -> Result<Session, LeaseError> {
         lock.lock(); defer { lock.unlock() }
-        guard let s = byId[id.lowercased()] else {
-            return .failure(.invalidId(reason: "no active lease with this acquisitionId"))
+        guard let s = lookupLocked(id) else {
+            return .failure(.invalidId(reason: "no active lease with this acquisitionId or token"))
         }
         if s.scope == .foreground { return .success(s) }
         if !pidAlive(s.pid) {
-            byId.removeValue(forKey: s.id); removeCursorsLocked(sessionID: s.id)
+            forgetLocked(s)
             return .failure(.invalidId(reason: "the target app exited; acquire again"))
         }
         if s.bid != "?", let now = currentBid(s.pid), now != s.bid {
-            byId.removeValue(forKey: s.id); removeCursorsLocked(sessionID: s.id)
+            forgetLocked(s)
             return .failure(.invalidId(reason: "the pid now belongs to a different app; acquire again"))
         }
         return .success(s)
@@ -118,17 +123,16 @@ final class SessionStore {
 
     func release(id: String) -> Result<Void, LeaseError> {
         lock.lock(); defer { lock.unlock() }
-        guard let s = byId[id.lowercased()] else {
-            return .failure(.invalidId(reason: "no active lease with this acquisitionId"))
+        guard let s = lookupLocked(id) else {
+            return .failure(.invalidId(reason: "no active lease with this acquisitionId or token"))
         }
-        byId.removeValue(forKey: s.id)
-        removeCursorsLocked(sessionID: s.id)
+        forgetLocked(s)
         return .success(())
     }
 
     func remove(id: String) {
         lock.lock(); defer { lock.unlock() }
-        if let s = byId.removeValue(forKey: id) { removeCursorsLocked(sessionID: s.id) }
+        if let s = lookupLocked(id) { forgetLocked(s) }
     }
 
     /// UI action. With a wid, free that window lease; without one, free every
@@ -141,10 +145,7 @@ final class SessionStore {
         } else {
             victims = byId.values.filter { $0.pid == pid }
         }
-        for s in victims {
-            byId.removeValue(forKey: s.id)
-            removeCursorsLocked(sessionID: s.id)
-        }
+        for s in victims { forgetLocked(s) }
     }
 
 
@@ -157,12 +158,8 @@ final class SessionStore {
                 live.append(s)
                 continue
             }
-            if !pidAlive(s.pid) {
-                byId.removeValue(forKey: s.id); removeCursorsLocked(sessionID: s.id); continue
-            }
-            if s.bid != "?", let now = currentBid(s.pid), now != s.bid {
-                byId.removeValue(forKey: s.id); removeCursorsLocked(sessionID: s.id); continue
-            }
+            if !pidAlive(s.pid) { forgetLocked(s); continue }
+            if s.bid != "?", let now = currentBid(s.pid), now != s.bid { forgetLocked(s); continue }
             live.append(s)
         }
         return live.sorted {
@@ -174,14 +171,22 @@ final class SessionStore {
 
     func find(id: String) -> Session? {
         lock.lock(); defer { lock.unlock() }
-        return byId[id.lowercased()]
+        return lookupLocked(id)
     }
 
-    /// True when the presented id is the lease id or the token shown for it in
-    /// the menubar. Either one names this lease and nothing else.
-    func matches(session: Session, presented id: String) -> Bool {
-        let v = id.lowercased()
-        return v == session.id.lowercased() || v == session.token.lowercased()
+    /// A presented value is either the lease id or the token shown for it in
+    /// the menubar. Both name one lease and nothing else.
+    private func lookupLocked(_ presented: String) -> Session? {
+        let v = presented.lowercased()
+        if let s = byId[v] { return s }
+        if let id = byToken[v] { return byId[id] }
+        return nil
+    }
+
+    private func forgetLocked(_ s: Session) {
+        byId.removeValue(forKey: s.id)
+        byToken.removeValue(forKey: s.token.lowercased())
+        removeCursorsLocked(sessionID: s.id)
     }
 
     /// Every call that reaches the whole Mac from a grant lands here, so the

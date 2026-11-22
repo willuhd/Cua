@@ -190,6 +190,14 @@ final class ForegroundCoordinator {
         return active?.sessionID
     }
 
+    /// The grant answers to its lease id and to the token the menubar shows,
+    /// which are the same string.
+    func namesGrant(_ id: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let a = active else { return false }
+        return a.sessionID.lowercased() == id.lowercased()
+    }
+
     func request(agent: String, reason: String,
                  coordSpace: CoordSpace) throws -> String {
         let requestId = shortID()

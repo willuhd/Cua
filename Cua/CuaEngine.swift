@@ -112,10 +112,11 @@ final class CuaEngine {
         guard let id = pString(params, "acquisitionId"), !id.isEmpty else {
             return .failure(ToolFailure(result: invalidIdResult("missing acquisitionId — call acquire first")))
         }
-        let activeID = ForegroundCoordinator.shared.activeSessionID
-        if let active = activeID, id.lowercased() != active.lowercased() {
+        if ForegroundCoordinator.shared.activeSessionID != nil,
+           !ForegroundCoordinator.shared.namesGrant(id) {
             return .failure(globalActiveFailure())
         }
+        let activeID = ForegroundCoordinator.shared.activeSessionID
         switch SessionStore.shared.validate(id: id) {
         case .success(let s):
             if activeID == nil && s.scope == .foreground {
