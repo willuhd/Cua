@@ -55,20 +55,13 @@
   #list::-webkit-scrollbar{width:8px}
   #list::-webkit-scrollbar-thumb{background:rgba(127,127,127,.28);border-radius:4px}
   #list::-webkit-scrollbar-track{background:transparent}
-  .group{margin:4px 0 6px}
-  .grouphead{display:flex;align-items:center;gap:7px;padding:2px 2px 4px;min-width:0}
-  .grouphead img{width:18px;height:18px;border-radius:4px;flex:0 0 auto}
-  .grouphead .gname{font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .sess{display:flex;gap:8px;align-items:center;padding:4px 2px;min-width:0}
+  .sess{display:flex;gap:8px;align-items:center;padding:5px 2px;min-width:0}
   .sess+.sess{border-top:.5px solid var(--hairline)}
   .sess img{width:20px;height:20px;border-radius:4px;flex:0 0 auto}
-  .sess .n{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px}
-  .sess .name{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .sess .id{flex:0 0 auto;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);letter-spacing:.15px;user-select:text;-webkit-user-select:text;cursor:text}
-  .badge{flex:0 0 auto;font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border:.5px solid var(--hairline);border-radius:4px;padding:1px 4px}
-  .badge.win{margin-left:2px}
-  .agent{flex:0 0 auto;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--muted)}
-  .sess button{height:21px;font-size:10.5px;padding:0 8px}
+  .sess .name{flex:1 1 auto;min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sess .ago{flex:0 0 auto;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .sess .tok{flex:0 0 auto;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);letter-spacing:.15px;user-select:text;-webkit-user-select:text;cursor:text}
+  .sess button{flex:0 0 auto;height:21px;font-size:10.5px;padding:0 8px;margin-left:2px}
   .empty{color:var(--muted);font-size:12px;padding:10px 2px}
   @media (min-width:480px){
     html,body{background:Canvas}
@@ -184,56 +177,46 @@ function renderPerms(s){
     else sendPermRect(false);
   });
 }
-function freeSession(s){
-  return postJSON('/api/free', s.scope === 'window' ? {pid:s.pid, wid:s.wid} : {pid:s.pid}).then(refresh);
+function ago(ms){
+  if (!ms) return 'never';
+  const m = Math.floor((Date.now() - ms) / 60000);
+  if (m < 1) return 'now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
 }
-function sessionRow(s){
+function freeApp(pid){
+  return postJSON('/api/free', {pid}).then(refresh);
+}
+/* One row per app: icon, name, how long ago an agent last touched it, the
+   token the agent has to present, and Stop. */
+function appRow(app){
   const d = el('div','sess');
   d.setAttribute('role','listitem');
-  const n = el('div','n');
-  const name = el('span','name', s.scope === 'window' ? (s.windowTitle || ('Window ' + s.wid)) : s.app);
-  const id = el('span','id', 'id: ' + (s.id || s.acquisitionId));
-  id.title = 'Lease id — pass as acquisitionId';
-  const badge = el('span','badge' + (s.scope === 'window' ? ' win' : ''), s.scope === 'window' ? 'win' : 'app');
-  const agent = el('span','agent', s.agent || '');
-  agent.title = s.agent || '';
-  n.append(name, badge, id, agent);
-  const b = el('button','inline', s.scope === 'window' ? 'Free' : 'Free app');
+  const img = el('img');
+  img.src = app.icon ? 'data:image/png;base64,' + app.icon : '';
+  const name = el('span','name', app.app);
+  name.title = app.app;
+  const last = el('span','ago', ago(app.lastActivity));
+  const tok = el('span','tok', app.token ? ('token ' + app.token) : '');
+  tok.title = 'The agent passes this as acquisitionId';
+  const b = el('button','inline','Stop');
   b.type = 'button';
-  b.title = s.scope === 'window' ? 'Free this window lease' : 'Free the app lease and all its windows';
-  b.onclick = () => freeSession(s);
-  d.append(n, b);
+  b.title = 'Drop this app\'s leases and stop the grant if it holds this Mac';
+  b.onclick = () => freeApp(app.pid);
+  d.append(img, name, last, tok, b);
   return d;
 }
 function renderSessions(s){
   const L = $('list');
-  const sessions = (s.sessions || []).filter(x => x.scope !== 'foreground');
-  if (!sessions.length) {
+  const apps = s.apps || [];
+  if (!apps.length) {
     L.replaceChildren(el('div','empty', 'No apps held.'));
     return;
   }
   L.replaceChildren();
-  const groups = new Map();
-  for (const x of sessions) {
-    if (!groups.has(x.pid)) groups.set(x.pid, []);
-    groups.get(x.pid).push(x);
-  }
-  for (const [, rows] of groups) {
-    const appRow = rows.find(x => x.scope === 'app');
-    const g = el('div','group');
-    const head = el('div','grouphead');
-    const icon = rows.find(x => x.icon)?.icon;
-    if (icon) { const img = el('img'); img.src = 'data:image/png;base64,' + icon; head.append(img); }
-    const name = rows[0].app + (appRow ? '' : ' · ' + rows.length + (rows.length === 1 ? ' window' : ' windows'));
-    head.append(el('span','gname', name));
-    g.append(head);
-    if (appRow) {
-      g.append(sessionRow(appRow));
-    } else {
-      for (const r of rows) g.append(sessionRow(r));
-    }
-    L.append(g);
-  }
+  for (const a of apps) L.append(appRow(a));
 }
 function renderForeground(s){
   const F = $('fg');
@@ -281,10 +264,14 @@ function renderForeground(s){
 function signature(s){
   return JSON.stringify({
     ax:s.ax, scr:s.scr, port:s.port,
-    sessions:(s.sessions || []).map(x => [x.pid, x.id, x.scope, x.wid, x.app, x.windowTitle, x.agent]),
+    apps:(s.apps || []).map(x => [x.pid, x.app, x.lastActivity, x.token]),
+    sessions:(s.sessions || []).map(x => [x.pid, x.id, x.scope, x.wid, x.windowTitle, x.agent]),
     fg:s.foreground ? [s.foreground.mode, s.foreground.requestId, s.foreground.sessionId, s.foreground.observation] : null
   });
 }
+/* The elapsed times go stale while the popover sits open; re-render the rows
+   every 30s only when the popover is visible and something is listed. */
+setInterval(() => { if (!document.hidden && state) renderSessions(state); }, 30000);
 function render(s){
   renderPerms(s);
   renderSessions(s);

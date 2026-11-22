@@ -336,9 +336,10 @@ final class ForegroundCoordinator {
         return (false, observedEpoch != humanEpoch)
     }
 
-    func release(sessionID: String) -> Bool {
+    /// Ends the grant when the presented id (or token) is the grant's own.
+    func release(id: String) -> Bool {
         lock.lock()
-        guard let a = active, a.sessionID.lowercased() == sessionID.lowercased() else { lock.unlock(); return false }
+        guard let a = active, a.sessionID.lowercased() == id.lowercased() else { lock.unlock(); return false }
         lock.unlock()
         stop()
         return true

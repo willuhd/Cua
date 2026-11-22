@@ -428,17 +428,32 @@ final class MCPServer: NSObject {
         if pathOnly == "/api/state" && req.method == "GET" {
             let sessions = SessionStore.shared.sessions().filter { $0.scope != .foreground }.map { s -> [String: Any] in
                 var d: [String: Any] = ["pid": Int(s.pid), "app": s.appName, "agent": s.agent ?? "unknown",
-                                         "id": s.id, "acquisitionId": s.id, "scope": s.scope.rawValue,
+                                         "id": s.id, "acquisitionId": s.id, "token": s.token,
+                                         "scope": s.scope.rawValue,
                                          "coordSpace": s.coordSpace.rawValue, "icon": iconBase64Cached(pid: s.pid)]
                 if let wid = s.wid { d["wid"] = Int(wid) }
                 if let title = s.windowTitle { d["windowTitle"] = title }
                 return d
             }
+            // One entry per app the menubar lists, so the free button always has
+            // a pid to work with even when the lease it names is already gone.
+            var apps: [[String: Any]] = []
+            var seen = Set<Int32>()
+            for s in SessionStore.shared.sessions() where s.scope != .foreground && !seen.contains(s.pid) {
+                seen.insert(s.pid)
+                var a: [String: Any] = ["pid": Int(s.pid), "app": s.appName, "icon": iconBase64Cached(pid: s.pid)]
+                if let touched = SessionStore.shared.lastActivity(pid: s.pid) {
+                    a["lastActivity"] = Int(touched.timeIntervalSince1970 * 1000)
+                }
+                apps.append(a)
+            }
+            apps.sort { ($0["app"] as? String ?? "") < ($1["app"] as? String ?? "") }
             let ax = AXIsProcessTrusted(); let scr = CGPreflightScreenCaptureAccess()
             let missing = [ax ? nil : "Accessibility", scr ? nil : "Screen Recording"].compactMap { $0 }.joined(separator: " + ")
             let perms = (ax && scr) ? "Permissions OK (Accessibility + Screen Recording)." : "Missing: \(missing). Grant as Cua.app via the button below."
-            let payload: [String: Any] = ["port": Int(port), "url": "http://127.0.0.1:\(port)/mcp", "perms": perms,
-                                          "ax": ax, "scr": scr, "sessions": sessions,
+            let payload: [String: Any] = ["version": cuaVersion,
+                                          "port": Int(port), "url": "http://127.0.0.1:\(port)/mcp", "perms": perms,
+                                          "ax": ax, "scr": scr, "sessions": sessions, "apps": apps,
                                           "appIcon": iconBase64Cached(pid: getpid()),
                                           "appPath": Bundle.main.bundleURL.path,
                                           "foreground": ForegroundCoordinator.shared.status()]

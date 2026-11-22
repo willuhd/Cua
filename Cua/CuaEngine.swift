@@ -112,15 +112,16 @@ final class CuaEngine {
         guard let id = pString(params, "acquisitionId"), !id.isEmpty else {
             return .failure(ToolFailure(result: invalidIdResult("missing acquisitionId — call acquire first")))
         }
-        if let active = ForegroundCoordinator.shared.activeSessionID,
-           id.lowercased() != active.lowercased() {
+        let activeID = ForegroundCoordinator.shared.activeSessionID
+        if let active = activeID, id.lowercased() != active.lowercased() {
             return .failure(globalActiveFailure())
         }
         switch SessionStore.shared.validate(id: id) {
         case .success(let s):
-            if ForegroundCoordinator.shared.activeSessionID == nil && s.scope == .foreground {
+            if activeID == nil && s.scope == .foreground {
                 return .failure(ToolFailure(result: invalidIdResult("foreground grant is no longer active")))
             }
+            SessionStore.shared.noteActivity(pid: s.pid)
             return .success(s)
         case .failure(let e):
             return .failure(ToolFailure(result: leaseErrorResult(e)))
@@ -341,6 +342,7 @@ final class CuaEngine {
                 d["held"] = true
                 d["scope"] = h.scope.rawValue
                 d["acquisitionId"] = h.id
+                d["token"] = h.token
                 d["agent"] = h.agent ?? "unknown"
                 if let wid = h.wid { d["wid"] = Int(wid) }
             } else { d["held"] = false }
@@ -349,8 +351,11 @@ final class CuaEngine {
         let sessionPayload = sessions.map { s -> [String: Any] in
             var d: [String: Any] = ["pid": Int(s.pid), "app": s.appName, "bid": s.bid,
                                      "scope": s.scope.rawValue, "agent": s.agent ?? "unknown",
-                                     "acquisitionId": s.id, "id": s.id,
+                                     "acquisitionId": s.id, "id": s.id, "token": s.token,
                                      "coordSpace": s.coordSpace.rawValue]
+            if let touched = SessionStore.shared.lastActivity(pid: s.pid) {
+                d["lastActivity"] = Int(touched.timeIntervalSince1970 * 1000)
+            }
             if let wid = s.wid {
                 d["wid"] = Int(wid)
                 if let title = windowTitle(wid: wid) { d["windowTitle"] = title }
@@ -407,10 +412,12 @@ final class CuaEngine {
             wid = requested
         }
         let agent = pString(params, "agent") ?? "agent"
+        SessionStore.shared.noteActivity(pid: pid)
         switch SessionStore.shared.acquire(pid: pid, scope: scope, wid: wid, coordSpace: space, agent: agent) {
         case .success(let s):
-            var payload: [String: Any] = ["acquisitionId": s.id, "pid": Int(s.pid), "app": s.appName,
-                                           "scope": s.scope.rawValue, "coordSpace": s.coordSpace.rawValue]
+            var payload: [String: Any] = ["acquisitionId": s.id, "token": s.token, "pid": Int(s.pid),
+                                           "app": s.appName, "scope": s.scope.rawValue,
+                                           "coordSpace": s.coordSpace.rawValue]
             if let wid = s.wid {
                 payload["wid"] = Int(wid)
                 if let title = s.windowTitle { payload["windowTitle"] = title }
@@ -429,7 +436,7 @@ final class CuaEngine {
             return invalidIdResult("no active lease with this acquisitionId")
         }
         if session.scope == .foreground {
-            _ = ForegroundCoordinator.shared.release(sessionID: session.id)
+            _ = ForegroundCoordinator.shared.release(id: id)
         } else {
             _ = SessionStore.shared.release(id: session.id)
         }
@@ -1012,7 +1019,7 @@ final class CuaEngine {
             let grant = try ForegroundCoordinator.shared.request(agent: agent, reason: reason,
                                                                   coordSpace: space)
             let payload: [String: Any] = ["ok": true, "foregroundGrantId": grant,
-                                           "acquisitionId": grant,
+                                           "acquisitionId": grant, "token": grant,
                                            "app": "This Mac", "coordSpace": space.rawValue]
             return toolResultText(jsonText(payload), structured: payload)
         } catch ForegroundRequestError.busy {

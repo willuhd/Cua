@@ -21,6 +21,9 @@ enum CoordSpace: String {
 
 struct Session {
     var id: String
+    /// The value the agent has to present. Same format as the id, generated
+    /// once per lease so the menubar can show it and the user can read it back.
+    var token: String
     var pid: Int32
     var agent: String?
     var appName: String
@@ -36,6 +39,9 @@ final class SessionStore {
     private var lock = NSLock()
     private var byId: [String: Session] = [:]
     private var cursors: [String: (Double, Double)] = [:]  // "session:wid" + "last:session"
+    /// Last time a call touched this pid, kept after the lease is gone so the
+    /// menubar can still say how long ago the app was used.
+    private var lastTouch: [Int32: Date] = [:]
 
     enum LeaseError: Error {
         case held(Session)
@@ -46,7 +52,7 @@ final class SessionStore {
     private func newSession(pid: Int32, scope: LeaseScope, wid: UInt32?, coordSpace: CoordSpace, agent: String?) -> Session {
         let name = pid == 0 ? "This Mac" : appNameForPid(pid)
         let bid = pid == 0 ? "?" : (NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid })?.bundleIdentifier ?? "?")
-        return Session(id: shortID(), pid: pid, agent: agent, appName: name, bid: bid,
+        return Session(id: shortID(), token: shortID(), pid: pid, agent: agent, appName: name, bid: bid,
                        scope: scope, wid: wid, coordSpace: coordSpace,
                        windowTitle: wid.flatMap { windowTitle(wid: $0) })
     }
@@ -169,6 +175,26 @@ final class SessionStore {
     func find(id: String) -> Session? {
         lock.lock(); defer { lock.unlock() }
         return byId[id.lowercased()]
+    }
+
+    /// True when the presented id is the lease id or the token shown for it in
+    /// the menubar. Either one names this lease and nothing else.
+    func matches(session: Session, presented id: String) -> Bool {
+        let v = id.lowercased()
+        return v == session.id.lowercased() || v == session.token.lowercased()
+    }
+
+    /// Every call that reaches the whole Mac from a grant lands here, so the
+    /// menubar can say when a pid was last used even after its lease is gone.
+    func noteActivity(pid: Int32) {
+        guard pid != 0 else { return }
+        lock.lock(); defer { lock.unlock() }
+        lastTouch[pid] = Date()
+    }
+
+    func lastActivity(pid: Int32) -> Date? {
+        lock.lock(); defer { lock.unlock() }
+        return lastTouch[pid]
     }
 
 
