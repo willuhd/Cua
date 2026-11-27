@@ -83,7 +83,9 @@ final class VideoReceiver {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
-        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        // Wildcard, so a datagram from the tailnet is accepted. The session is
+        // expected to sit behind an encrypted overlay rather than a plain LAN.
+        addr.sin_addr.s_addr = INADDR_ANY
         let ok = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
                 Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))

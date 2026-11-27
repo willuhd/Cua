@@ -112,10 +112,13 @@ final class AV1Encoder {
 
         let sent = svt_av1_enc_send_picture(component, hdr)
         guard sent == EB_ErrorNone else { throw EncodeError.send(sent.rawValue) }
-        // One picture in, at most one packet out. Asking twice would block,
-        // because the encoder has nothing more queued.
-        if let packet = try nextPacket(component, flushing: false) { return [packet] }
-        return []
+        // In low delay the encoder takes one picture and gives one packet back
+        // inside this call, so the input is finished with by the time we return.
+        // Holding it any longer is what turns a 4 MB frame at 75 fps into
+        // hundreds of megabytes a second of retained memory.
+        let packet = try nextPacket(component, flushing: false)
+        releaseInFlight()
+        return packet.map { [$0] } ?? []
     }
 
     /// Convenience for a converted buffer.
@@ -151,6 +154,7 @@ final class AV1Encoder {
         _ = svt_av1_enc_send_picture(component, eos)
         var out: [Data] = []
         while let packet = try nextPacket(component, flushing: true) { out.append(packet) }
+        releaseInFlight()
         return out
     }
 
@@ -169,11 +173,17 @@ final class AV1Encoder {
         return eos && data == nil ? nil : data
     }
 
+    /// Frees the per-frame input buffers once the encoder has returned a packet.
+    private func releaseInFlight() {
+        for pointer in inFlight { pointer.deallocate() }
+        inFlight.removeAll(keepingCapacity: true)
+    }
+
     deinit {
         if let component {
             svt_av1_enc_deinit(component)
             svt_av1_enc_deinit_handle(component)
         }
-        for pointer in inFlight { pointer.deallocate() }
+        releaseInFlight()
     }
 }

@@ -86,6 +86,62 @@ final class I420Converter {
     }
 }
 
+/// Converts a decoded frame into the BGRA the Metal layer draws.
+///
+/// dav1d hands back planar 4:2:0; the renderer samples BGRA. Doing this on the
+/// GPU keeps the decoder output on the GPU path instead of walking pixels on
+/// the CPU at 75 fps.
+final class DisplayConverter {
+    private var session: VTPixelTransferSession?
+    private var pool: CVPixelBufferPool?
+    private var poolWidth = 0
+    private var poolHeight = 0
+
+    init() throws {
+        var created: VTPixelTransferSession?
+        let status = VTPixelTransferSessionCreate(allocator: kCFAllocatorDefault, pixelTransferSessionOut: &created)
+        guard status == kCVReturnSuccess, let created else { throw PixelFormatError.session(status) }
+        session = created
+    }
+
+    private func destination(width: Int, height: Int) throws -> CVPixelBuffer {
+        if pool == nil || width != poolWidth || height != poolHeight {
+            let attributes: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+            ]
+            var created: CVPixelBufferPool?
+            let status = CVPixelBufferPoolCreate(kCFAllocatorDefault, nil,
+                                                 attributes as CFDictionary, &created)
+            guard status == kCVReturnSuccess, let created else { throw PixelFormatError.pool(status) }
+            pool = created
+            poolWidth = width
+            poolHeight = height
+        }
+        var buffer: CVPixelBuffer?
+        let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool!, &buffer)
+        guard status == kCVReturnSuccess, let buffer else { throw PixelFormatError.pool(status) }
+        return buffer
+    }
+
+    func convert(_ source: CVPixelBuffer) throws -> CVPixelBuffer {
+        guard let session else { throw PixelFormatError.session(0) }
+        let width = CVPixelBufferGetWidth(source)
+        let height = CVPixelBufferGetHeight(source)
+        let output = try destination(width: width, height: height)
+        let status = VTPixelTransferSessionTransferImage(session, from: source, to: output)
+        guard status == kCVReturnSuccess else { throw PixelFormatError.transfer(status) }
+        return output
+    }
+
+    deinit {
+        if let session { VTPixelTransferSessionInvalidate(session) }
+    }
+}
+
 /// The three planes of a converted buffer, as SVT wants them.
 struct I420Frame {
     let luma: UnsafeMutableRawPointer

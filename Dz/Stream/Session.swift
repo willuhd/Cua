@@ -28,7 +28,8 @@ final class HostSession {
     private let source: ScreenSource
     private let converter: I420Converter
     private let encoder: AV1Encoder
-    private let sender: VideoSender
+    /// Created once a client connects, pointed at whatever address it came from.
+    private var sender: VideoSender?
     private let injector: InputInjector
 
     private var control: ControlChannel?
@@ -38,10 +39,22 @@ final class HostSession {
     private var running = false
     private let stateLock = NSLock()
 
-    /// Reported to the UI: frames sent, packets sent, encode failures.
+    /// Reported to the UI and broadcast to the client.
     private(set) var framesSent = 0
     private(set) var packetsSent = 0
+    private(set) var bytesSent = 0
+    private(set) var framesSkipped = 0
+    private(set) var measuredFps: Double = 0
     var onInput: ((InputEvent) -> Void)?
+
+    /// Cadence gate: a frame that arrives sooner than the pinned interval is
+    /// dropped, never encoded. Capture can deliver faster than the stream rate
+    /// (a display changing mode, or ScreenCaptureKit coalescing differently),
+    /// and encoding those would burn the host's cores on frames the client
+    /// never asked for.
+    private var lastEncodeMicros: UInt64 = 0
+    private var windowFrames = 0
+    private var statsTimer: DispatchSourceTimer?
 
     init(settings: StreamSettings,
          videoPort: UInt16 = 47900,
@@ -52,21 +65,52 @@ final class HostSession {
         self.source = ScreenSource(settings: self.settings)
         self.converter = try I420Converter()
         self.encoder = try AV1Encoder(settings: self.settings)
-        self.sender = try VideoSender(host: "127.0.0.1", port: videoPort)
         self.injector = InputInjector()
     }
 
     func start() async throws {
         let channel = try ControlChannel.listen(port: controlPort)
         control = channel
-        channel.onEvent = { [weak self] event in
-            guard let self else { return }
+        channel.onMessage = { [weak self] message in
+            guard let self, case .input(let event) = message else { return }
             self.injector.inject(event)
             self.onInput?(event)
+        }
+        channel.onConnected = { [weak self] peer in
+            guard let self else { return }
+            do {
+                self.sender = try VideoSender(host: peer, port: self.videoPort)
+                NSLog("dz: client connected from %@", peer)
+            } catch {
+                NSLog("dz: could not open the video path to %@: %@", peer, "\(error)")
+            }
         }
         controlQueue.async {
             do { try channel.acceptAndRead() } catch { NSLog("dz: control channel ended: %@", "\(error)") }
         }
+
+        // Tell the client what this host is really doing, once a second.
+        let timer = DispatchSource.makeTimerSource(queue: controlQueue)
+        timer.schedule(deadline: .now() + 1, repeating: 1)
+        timer.setEventHandler { [weak self] in
+            guard let self, let channel = self.control else { return }
+            self.stateLock.lock()
+            let fps = Double(self.windowFrames)
+            self.windowFrames = 0
+            self.measuredFps = fps
+            let stats = SessionStats(role: "host",
+                                     fps: fps,
+                                     framesSent: self.framesSent,
+                                     packetsSent: self.packetsSent,
+                                     bytesSent: self.bytesSent,
+                                     framesSkipped: self.framesSkipped,
+                                     targetFps: self.settings.frameRate,
+                                     timestampMicros: DispatchTime.now().uptimeNanoseconds / 1000)
+            self.stateLock.unlock()
+            _ = channel.send(stats: stats)
+        }
+        timer.resume()
+        statsTimer = timer
 
         source.onFrame = { [weak self] buffer in
             guard let self else { return }
@@ -78,6 +122,14 @@ final class HostSession {
     }
 
     private func pipeline(_ buffer: CVPixelBuffer) {
+        guard sender != nil else { return }
+        let nowMicros = DispatchTime.now().uptimeNanoseconds / 1000
+        let interval = UInt64(1_000_000 / max(1, settings.frameRate))
+        if lastEncodeMicros != 0, nowMicros &- lastEncodeMicros < interval {
+            stateLock.lock(); framesSkipped += 1; stateLock.unlock()
+            return
+        }
+        lastEncodeMicros = nowMicros
         do {
             let converted = try converter.convert(buffer)
             guard let frame = I420Frame(converted) else { return }
@@ -93,17 +145,23 @@ final class HostSession {
                                                                          timestampMicros: stamp,
                                                                          keyframe: keyframe,
                                                                          mtu: VideoPacket.defaultMTU)
-                sender.send(fragments)
-                stateLock.lock(); packetsSent += fragments.count; stateLock.unlock()
+                sender?.send(fragments)
+                let sentBytes = fragments.reduce(0) { $0 + $1.payload.count + VideoPacket.headerSize }
+                stateLock.lock()
+                packetsSent += fragments.count
+                bytesSent += sentBytes
+                stateLock.unlock()
             }
             frameIndex &+= 1
-            stateLock.lock(); framesSent += 1; stateLock.unlock()
+            stateLock.lock(); framesSent += 1; windowFrames += 1; stateLock.unlock()
         } catch {
             NSLog("dz: encode failed: %@", "\(error)")
         }
     }
 
     func stop() {
+        statsTimer?.cancel()
+        statsTimer = nil
         source.stop()
         control?.close()
         stateLock.lock(); running = false; stateLock.unlock()
@@ -119,6 +177,7 @@ final class ClientSession {
     private let assembler: FrameAssembler
     private let control: ControlChannel
     private let receiveQueue = DispatchQueue(label: "dz.receive", qos: .userInteractive)
+    private let display = try? DisplayConverter()
 
     let view: StreamView
     private var running = false
@@ -126,6 +185,8 @@ final class ClientSession {
 
     private(set) var framesShown = 0
     private(set) var framesDropped = 0
+    /// What the host says it is encoding, so the two ends can be compared.
+    private(set) var hostStats: SessionStats?
 
     /// Must be constructed on the main thread: the view is AppKit.
     init(settings: StreamSettings,
@@ -143,6 +204,10 @@ final class ClientSession {
         view.onInput = { [weak control] event in
             _ = control?.send(event)
         }
+        control.onMessage = { [weak self] message in
+            guard case .stats(let stats) = message else { return }
+            self?.hostStats = stats
+        }
     }
 
     func start() {
@@ -157,9 +222,15 @@ final class ClientSession {
             guard let packet = receiver.receive(timeout: 0.2) else { continue }
             guard let whole = assembler.ingest(packet) else { continue }
             do {
-                if try decoder.decode(whole) != nil {
-                    stateLock.lock(); framesShown += 1; stateLock.unlock()
+                guard let frame = try decoder.decode(whole) else { continue }
+                // The layer samples BGRA, so the decoded planes are converted
+                // once and drawn; the counter only moves when a frame is
+                // actually handed to the view.
+                if let bgra = try display?.convert(frame) {
+                    let view = self.view
+                    DispatchQueue.main.async { view.display(bgra) }
                 }
+                stateLock.lock(); framesShown += 1; stateLock.unlock()
             } catch {
                 stateLock.lock(); framesDropped += 1; stateLock.unlock()
             }

@@ -1,0 +1,87 @@
+//
+//  ControlMessage.swift
+//  dz
+//
+//  The control channel is bidirectional: the client sends input, the host
+//  sends back what it is actually doing.
+//
+//  The host broadcasting its real encode rate is what keeps it from encoding
+//  frames nobody will look at. The client can see what it is being sent and
+//  what the host is spending, and the numbers on both ends agree because they
+//  come from the same place.
+//
+
+import Foundation
+
+/// What the host reports so both ends agree on what the stream is doing.
+struct SessionStats: Codable, Equatable {
+    var role: String
+    /// Frames actually encoded in the last measurement window.
+    var fps: Double
+    var framesSent: Int
+    var packetsSent: Int
+    var bytesSent: Int
+    /// Frames the capture delivered that the cadence gate threw away.
+    var framesSkipped: Int
+    /// The ceiling the user pinned, echoed back so the client can show both.
+    var targetFps: Int
+    var timestampMicros: UInt64
+}
+
+enum ControlMessage: Codable {
+    case input(InputEvent)
+    case stats(SessionStats)
+
+    private enum CodingKeys: String, CodingKey { case kind, input, stats }
+    private enum Kind: String, Codable { case input, stats }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .input: self = .input(try container.decode(InputEvent.self, forKey: .input))
+        case .stats: self = .stats(try container.decode(SessionStats.self, forKey: .stats))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .input(let event):
+            try container.encode(Kind.input, forKey: .kind)
+            try container.encode(event, forKey: .input)
+        case .stats(let stats):
+            try container.encode(Kind.stats, forKey: .kind)
+            try container.encode(stats, forKey: .stats)
+        }
+    }
+}
+
+/// Length-prefixed framing for the control stream.
+enum ControlFraming {
+    static func encode(_ message: ControlMessage) -> Data? {
+        guard let body = try? JSONEncoder().encode(message) else { return nil }
+        var out = Data(capacity: 4 + body.count)
+        let length = UInt32(body.count)
+        out.append(UInt8(truncatingIfNeeded: length >> 24))
+        out.append(UInt8(truncatingIfNeeded: length >> 16))
+        out.append(UInt8(truncatingIfNeeded: length >> 8))
+        out.append(UInt8(truncatingIfNeeded: length))
+        out.append(body)
+        return out
+    }
+
+    static func drain(_ buffer: inout Data) -> [ControlMessage] {
+        var messages: [ControlMessage] = []
+        while buffer.count >= 4 {
+            let b = [UInt8](buffer.prefix(4))
+            let length = Int(UInt32(b[0]) << 24 | UInt32(b[1]) << 16 | UInt32(b[2]) << 8 | UInt32(b[3]))
+            guard length > 0, length < 1_000_000, buffer.count >= 4 + length else { break }
+            let body = buffer.subdata(in: 4..<(4 + length))
+            buffer.removeFirst(4 + length)
+            if let message = try? JSONDecoder().decode(ControlMessage.self, from: body) {
+                messages.append(message)
+            }
+        }
+        return messages
+    }
+}

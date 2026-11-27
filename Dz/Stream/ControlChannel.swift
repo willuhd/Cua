@@ -31,7 +31,7 @@ enum ControlError: Error, CustomStringConvertible {
 
 final class ControlChannel {
     /// Delivered on the reading queue.
-    var onEvent: ((InputEvent) -> Void)?
+    var onMessage: ((ControlMessage) -> Void)?
 
     private var fd: Int32 = -1
     private let queue = DispatchQueue(label: "dz.control", qos: .userInteractive)
@@ -75,7 +75,7 @@ final class ControlChannel {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
-        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        addr.sin_addr.s_addr = INADDR_ANY
         let ok = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
                 Darwin.bind(channel.fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
@@ -90,13 +90,24 @@ final class ControlChannel {
         fd = socket(AF_INET, SOCK_STREAM, 0)
     }
 
+    /// Called on the host once a client connects, with the address its video
+    /// should be sent to. The host learns the peer here rather than being told.
+    var onConnected: ((String) -> Void)?
+
     /// Accepts one client and starts reading from it. Blocks until someone
     /// connects, so call it off the main thread.
     func acceptAndRead() throws {
-        var caddr = sockaddr()
-        var len = socklen_t(MemoryLayout<sockaddr>.size)
-        let client = withUnsafeMutablePointer(to: &caddr) { accept(fd, $0, &len) }
+        var caddr = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let client = withUnsafeMutablePointer(to: &caddr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(fd, $0, &len) }
+        }
         guard client >= 0 else { throw ControlError.socket(errno) }
+
+        var host = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        if inet_ntop(AF_INET, &caddr.sin_addr, &host, socklen_t(INET_ADDRSTRLEN)) != nil {
+            onConnected?(String(cString: host))
+        }
         var one: Int32 = 1
         setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
         Darwin.close(fd)
@@ -109,10 +120,17 @@ final class ControlChannel {
         queue.async { [weak self] in self?.readLoop() }
     }
 
-    /// Sends one event. Returns false if the channel is closed.
+    /// Sends one input event. Returns false if the channel is closed.
     @discardableResult
-    func send(_ event: InputEvent) -> Bool {
-        guard let framed = InputFraming.encode(event) else { return false }
+    func send(_ event: InputEvent) -> Bool { send(.input(event)) }
+
+    /// Sends host statistics back to the client.
+    @discardableResult
+    func send(stats: SessionStats) -> Bool { send(.stats(stats)) }
+
+    @discardableResult
+    private func send(_ message: ControlMessage) -> Bool {
+        guard let framed = ControlFraming.encode(message) else { return false }
         lock.lock()
         defer { lock.unlock() }
         guard fd >= 0 else { return false }
@@ -135,7 +153,7 @@ final class ControlChannel {
             let n = recv(fd, &chunk, chunk.count, 0)
             if n > 0 {
                 buffer.append(contentsOf: chunk[0..<n])
-                for event in InputFraming.drain(&buffer) { onEvent?(event) }
+                for message in ControlFraming.drain(&buffer) { onMessage?(message) }
                 continue
             }
             if n < 0 && errno == EINTR { continue }
