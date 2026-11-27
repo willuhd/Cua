@@ -22,3 +22,7 @@ Temporary Items
 
 # swift typecheck module cache
 .swiftcache/
+
+# Xcode user state stays out of the repo
+*.xcuserstate
+xcuserdata/
