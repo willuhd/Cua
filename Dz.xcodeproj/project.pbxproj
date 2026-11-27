@@ -6,9 +6,31 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		DEADBEEF00000000000000D1 /* libdav1d.7.dylib in Embed codec libraries */ = {isa = PBXBuildFile; fileRef = DEADBEEF00000000000000C1 /* libdav1d.7.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		DEADBEEF00000000000000D2 /* libSvtAv1Enc.3.dylib in Embed codec libraries */ = {isa = PBXBuildFile; fileRef = DEADBEEF00000000000000C2 /* libSvtAv1Enc.3.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		BEBFEABF30A95F6A0076E67D /* dz.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = dz.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DEADBEEF00000000000000C1 /* libdav1d.7.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = "libdav1d.7.dylib"; path = ".agents/tools/dav1d-1.5.1/build/src/libdav1d.7.dylib"; sourceTree = SOURCE_ROOT; };
+		DEADBEEF00000000000000C2 /* libSvtAv1Enc.3.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = "libSvtAv1Enc.3.dylib"; path = ".agents/tools/SVT-AV1-3.1.2/Bin/Release/libSvtAv1Enc.3.dylib"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		DEADBEEF00000000000000E1 /* Embed codec libraries */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				DEADBEEF00000000000000D1 /* libdav1d.7.dylib in Embed codec libraries */,
+				DEADBEEF00000000000000D2 /* libSvtAv1Enc.3.dylib in Embed codec libraries */,
+			);
+			name = "Embed codec libraries";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		BEBFEAC130A95F6A0076E67D /* Dz */ = {
@@ -55,6 +77,7 @@
 				BEBFEABB30A95F6A0076E67D /* Sources */,
 				BEBFEABC30A95F6A0076E67D /* Frameworks */,
 				BEBFEABD30A95F6A0076E67D /* Resources */,
+				DEADBEEF00000000000000E1 /* Embed codec libraries */,
 			);
 			buildRules = (
 			);
@@ -279,8 +302,6 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
-					"$(SRCROOT)/.agents/tools/dav1d-1.5.1/build/src",
-					"$(SRCROOT)/.agents/tools/SVT-AV1-3.1.2/Bin/Release",
 				);
 				PRODUCT_NAME = dz;
 				REGISTER_APP_GROUPS = YES;
@@ -327,8 +348,6 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
-					"$(SRCROOT)/.agents/tools/dav1d-1.5.1/build/src",
-					"$(SRCROOT)/.agents/tools/SVT-AV1-3.1.2/Bin/Release",
 				);
 				PRODUCT_NAME = dz;
 				REGISTER_APP_GROUPS = YES;
