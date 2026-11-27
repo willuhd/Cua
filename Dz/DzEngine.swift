@@ -6,8 +6,8 @@ struct ToolFailure: Error {
     let result: [String: Any]
 }
 
-final class CuaEngine {
-    static let shared = CuaEngine()
+final class DzEngine {
+    static let shared = DzEngine()
 
     /// type posts one keyboard event per character while holding the global
     /// input gate, so the string is bounded like every other walk or payload.

@@ -2,9 +2,9 @@ import CoreGraphics
 import Darwin
 
 // MARK: – event input
-let cuaSyntheticEventTag: Int64 = 0x43554131
+let dzSyntheticEventTag: Int64 = 0x43554131
 func tagSynthetic(_ e: CGEvent) {
-    e.setIntegerValueField(.eventSourceUserData, value: cuaSyntheticEventTag)
+    e.setIntegerValueField(.eventSourceUserData, value: dzSyntheticEventTag)
 }
 
 @discardableResult

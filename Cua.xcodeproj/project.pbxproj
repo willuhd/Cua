@@ -13,7 +13,7 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		BEBFEAC130A95F6A0076E67D /* Cua */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Cua;
+			path = Dz;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */

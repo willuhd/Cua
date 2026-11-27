@@ -17,3 +17,8 @@ Network Trash Folder
 Temporary Items
 .apdisk
 *.icloud
+# local build output
+.build/
+
+# swift typecheck module cache
+.swiftcache/

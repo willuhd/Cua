@@ -4,7 +4,7 @@ import Darwin
 // MARK: - MCP helpers (JSON-RPC over HTTP)
 /// The version an MCP client sees is the app version. There is no second
 /// number to keep in sync with Info.plist.
-let cuaVersion: String = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0"
+let dzVersion: String = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0"
 func jsonData(_ obj: [String: Any]) -> Data {
     (try? JSONSerialization.data(withJSONObject: obj, options: [.withoutEscapingSlashes])) ?? Data()
 }
@@ -25,7 +25,7 @@ func toolResultImage(png: Data, caption: String, structured: [String: Any]? = ni
 }
 /// Read by the agent before it touches anything. Written for that agent, not
 /// as a description of the source: what to do, in what order, and when to stop.
-let cuaInstructions = [
+let dzInstructions = [
     "Cua lets you use someone's Mac for them: their pointer, their menus, their windows.",
     "",
     "Start with list_apps, then acquire the app you need. You get an acquisitionId; pass it on every call until you release. By default you work in the background: your clicks and keys reach that app without moving their pointer or raising the window.",
@@ -162,25 +162,25 @@ final class MCPServer: NSObject {
             // This call deliberately waits for menubar approval. It runs on its
             // own queue so background sessions can keep working until the user
             // approves and the coordinator revokes them.
-            foregroundQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
+            foregroundQueue.sync { result = DzEngine.shared.dispatch(tool: name, params: args) }
         } else if inputTools.contains(name) {
             if let id = args["acquisitionId"] as? String, !id.isEmpty {
                 queueForLease(id).sync {
                     InputGate.shared.withLock {
-                        result = CuaEngine.shared.dispatch(tool: name, params: args)
+                        result = DzEngine.shared.dispatch(tool: name, params: args)
                     }
                 }
             } else {
                 InputGate.shared.withLock {
-                    result = CuaEngine.shared.dispatch(tool: name, params: args)
+                    result = DzEngine.shared.dispatch(tool: name, params: args)
                 }
             }
         } else if controlTools.contains(name) {
-            controlQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
+            controlQueue.sync { result = DzEngine.shared.dispatch(tool: name, params: args) }
         } else if let id = args["acquisitionId"] as? String, !id.isEmpty {
-            queueForLease(id).sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
+            queueForLease(id).sync { result = DzEngine.shared.dispatch(tool: name, params: args) }
         } else {
-            controlQueue.sync { result = CuaEngine.shared.dispatch(tool: name, params: args) }
+            controlQueue.sync { result = DzEngine.shared.dispatch(tool: name, params: args) }
         }
         if name == "release", let id = args["acquisitionId"] as? String {
             dropLeaseQueue(id)
@@ -474,7 +474,7 @@ final class MCPServer: NSObject {
             let ax = AXIsProcessTrusted(); let scr = CGPreflightScreenCaptureAccess()
             let missing = [ax ? nil : "Accessibility", scr ? nil : "Screen Recording"].compactMap { $0 }.joined(separator: " + ")
             let perms = (ax && scr) ? "Permissions OK (Accessibility + Screen Recording)." : "Missing: \(missing). Grant as Cua.app via the button below."
-            let payload: [String: Any] = ["version": cuaVersion,
+            let payload: [String: Any] = ["version": dzVersion,
                                           "port": Int(port), "url": "http://127.0.0.1:\(port)/mcp", "perms": perms,
                                           "ax": ax, "scr": scr, "sessions": sessions, "apps": apps,
                                           "appIcon": iconBase64Cached(pid: getpid()),
@@ -634,9 +634,9 @@ final class MCPServer: NSObject {
             let sid = UUID().uuidString
             let result: [String: Any] = [
                 "protocolVersion": "2025-06-18",
-                "serverInfo": ["name": "cua-mcp", "version": cuaVersion],
+                "serverInfo": ["name": "cua-mcp", "version": dzVersion],
                 "capabilities": ["tools": ["listChanged": false]],
-                "instructions": cuaInstructions,
+                "instructions": dzInstructions,
             ]
             var r = result
             // Advertise only a protocol version this server actually speaks.

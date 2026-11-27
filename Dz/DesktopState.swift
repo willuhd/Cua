@@ -127,7 +127,7 @@ final class HumanInputMonitor {
             // Only events this app tagged are ours. Anything else is human,
             // including an event that arrives without a CGEvent.
             if let cg = event.cgEvent,
-               cg.getIntegerValueField(.eventSourceUserData) == cuaSyntheticEventTag { return }
+               cg.getIntegerValueField(.eventSourceUserData) == dzSyntheticEventTag { return }
             ForegroundCoordinator.shared.noteHumanInput()
         }
     }

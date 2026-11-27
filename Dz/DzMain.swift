@@ -29,7 +29,7 @@
 import Cocoa
 
 @main
-struct CuaMain {
+struct DzMain {
     static func main() {
         let app = NSApplication.shared
         let d = AppDelegate()
