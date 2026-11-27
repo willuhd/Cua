@@ -26,6 +26,9 @@ final class AV1Encoder {
 
     private var component: UnsafeMutablePointer<EbComponentType>?
     private var pts: Int64 = 0
+    /// SVT holds on to the header and pixel buffer it is given until the packet
+    /// comes back, so both are allocated per frame and freed on teardown.
+    private var inFlight: [UnsafeMutableRawPointer] = []
     private let settings: StreamSettings
 
     init(settings: StreamSettings) throws {
@@ -49,9 +52,9 @@ final class AV1Encoder {
                                       ? SVT_AV1_RC_MODE_CBR.rawValue
                                       : SVT_AV1_RC_MODE_VBR.rawValue)
         cfg.target_bit_rate = UInt32(self.settings.bitrate)
-        // Low delay P: no lookahead, no B frames. Required for CBR, and the
-        // right shape for a desktop stream regardless.
-        cfg.pred_structure = UInt8(SVT_AV1_PRED_LOW_DELAY_P.rawValue)
+        // Low delay: no lookahead, and CBR is refused without it. The library
+        // deprecated the P variant, so low delay means LOW_DELAY_B in 3.x.
+        cfg.pred_structure = UInt8(SVT_AV1_PRED_LOW_DELAY_B.rawValue)
         // A keyframe every two seconds, so a client that joins late or drops
         // does not wait long to recover.
         cfg.intra_period_length = Int32(self.settings.frameRate * 2)
@@ -67,15 +70,21 @@ final class AV1Encoder {
     func encode(nv12: UnsafeMutableRawPointer, byteCount: Int) throws -> [Data] {
         guard let component else { throw EncodeError.setup("encoder closed") }
 
-        var header = EbBufferHeaderType()
-        header.size = UInt32(MemoryLayout<EbBufferHeaderType>.size)
-        header.p_buffer = nv12.assumingMemoryBound(to: UInt8.self)
-        header.n_filled_len = UInt32(byteCount)
-        header.n_alloc_len = UInt32(byteCount)
-        header.pts = pts
+        let hdr = UnsafeMutablePointer<EbBufferHeaderType>.allocate(capacity: 1)
+        hdr.initialize(to: EbBufferHeaderType())
+        let pixels = UnsafeMutableRawPointer.allocate(byteCount: byteCount, alignment: 64)
+        pixels.copyMemory(from: nv12, byteCount: byteCount)
+        inFlight.append(UnsafeMutableRawPointer(hdr))
+        inFlight.append(pixels)
+
+        hdr.pointee.size = UInt32(MemoryLayout<EbBufferHeaderType>.size)
+        hdr.pointee.p_buffer = pixels.assumingMemoryBound(to: UInt8.self)
+        hdr.pointee.n_filled_len = UInt32(byteCount)
+        hdr.pointee.n_alloc_len = UInt32(byteCount)
+        hdr.pointee.pts = pts
         pts += 1
 
-        let sent = svt_av1_enc_send_picture(component, &header)
+        let sent = svt_av1_enc_send_picture(component, hdr)
         guard sent == EB_ErrorNone else { throw EncodeError.send(sent.rawValue) }
         return try drain(component)
     }
@@ -108,5 +117,6 @@ final class AV1Encoder {
             svt_av1_enc_deinit(component)
             svt_av1_enc_deinit_handle(component)
         }
+        for pointer in inFlight { pointer.deallocate() }
     }
 }
