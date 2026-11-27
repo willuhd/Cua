@@ -56,6 +56,17 @@ jobs:
           pipx install dmgbuild || pipx upgrade dmgbuild
           command -v dmgbuild
 
+      - name: Build codec libraries
+        run: |
+          set -euo pipefail
+          # dav1d and SVT-AV1 are linked into the app, so they have to exist
+          # before the target builds. The script fetches its own ninja, meson
+          # and nasm; only cmake is expected to be present.
+          command -v cmake >/dev/null || brew install cmake
+          ./scripts/build-codecs.sh
+          lipo -archs .agents/tools/dav1d-1.5.1/build/src/libdav1d.7.dylib
+          lipo -archs .agents/tools/SVT-AV1-3.1.2/Bin/Release/libSvtAv1Enc.3.dylib
+
       - name: Build app bundle
         run: |
           set -euo pipefail
