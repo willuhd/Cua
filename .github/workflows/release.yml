@@ -64,8 +64,15 @@ jobs:
           # and nasm; only cmake is expected to be present.
           command -v cmake >/dev/null || brew install cmake
           ./scripts/build-codecs.sh
-          lipo -archs .agents/tools/dav1d-1.5.1/build/src/libdav1d.7.dylib
-          lipo -archs .agents/tools/SVT-AV1-3.1.2/Bin/Release/libSvtAv1Enc.3.dylib
+          # The app is built for both architectures, so a single-slice library
+          # has to fail here rather than at link time.
+          for lib in .agents/tools/dav1d-1.5.1/build/src/libdav1d.7.dylib \
+                     .agents/tools/SVT-AV1-3.1.2/Bin/Release/libSvtAv1Enc.3.dylib; do
+            archs="$(lipo -archs "$lib")"
+            echo "$lib: $archs"
+            case "$archs" in *arm64*) ;; *) echo "::error::$lib is missing arm64"; exit 1 ;; esac
+            case "$archs" in *x86_64*) ;; *) echo "::error::$lib is missing x86_64"; exit 1 ;; esac
+          done
 
       - name: Build app bundle
         run: |
