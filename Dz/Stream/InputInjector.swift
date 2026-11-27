@@ -33,9 +33,9 @@ final class InputInjector {
     func inject(_ event: InputEvent) {
         switch event.kind {
         case .mouseMove:
-            post(type: .mouseMoved, at: point(event.x, event.y), button: .left, event: event)
+            post(type: .mouseMoved, at: destination(for: event), button: .left, event: event)
         case .mouseDrag:
-            post(type: .leftMouseDragged, at: point(event.x, event.y), button: .left, event: event)
+            post(type: .leftMouseDragged, at: destination(for: event), button: .left, event: event)
         case .mouseDown, .mouseUp:
             let button = CGMouseButton(rawValue: UInt32(event.code)) ?? .left
             let down = event.kind == .mouseDown
@@ -68,10 +68,28 @@ final class InputInjector {
         }
     }
 
+    /// Where a motion event should land.
+    ///
+    /// In locked mode the client confines its cursor and reports deltas, so the
+    /// absolute position it sends is meaningless; the cursor has to be moved by
+    /// the delta from where it currently is. Free mode is the opposite.
+    private func destination(for event: InputEvent) -> CGPoint {
+        guard event.dx != 0 || event.dy != 0 else { return point(event.x, event.y) }
+        let current = CGEvent(source: nil)?.location ?? .zero
+        var next = CGPoint(x: current.x + event.dx, y: current.y + event.dy)
+        next.x = min(max(next.x, screenBounds.minX), screenBounds.maxX - 1)
+        next.y = min(max(next.y, screenBounds.minY), screenBounds.maxY - 1)
+        return next
+    }
+
     private func post(type: CGEventType, at location: CGPoint, button: CGMouseButton, event: InputEvent) {
         guard let cg = CGEvent(mouseEventSource: nil, mouseType: type,
                                mouseCursorPosition: location, mouseButton: button) else { return }
         cg.flags = CGEventFlags(rawValue: event.flags)
+        if event.dx != 0 || event.dy != 0 {
+            cg.setIntegerValueField(.mouseEventDeltaX, value: Int64(event.dx))
+            cg.setIntegerValueField(.mouseEventDeltaY, value: Int64(event.dy))
+        }
         tag(cg)
         cg.post(tap: .cghidEventTap)
     }

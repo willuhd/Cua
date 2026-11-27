@@ -7,8 +7,11 @@
 //  Video can lose datagrams: the reassembler drops a torn frame and the next
 //  one repairs it. Input cannot. A dropped key release leaves a key stuck down
 //  on the host, and a dropped mouse move leaves the pointer somewhere the user
-//  did not put it. So input gets its own ordered, length-prefixed channel and
-//  leaves the UDP path to the pictures.
+//  did not put it. So input gets its own ordered, length-prefixed channel.
+//
+//  Reading and writing run on separate queues. Sending never blocks the caller,
+//  because the caller is AppKit delivering a key press: blocking there on a
+//  stalled TCP window would freeze the window with a modifier still held down.
 //
 
 import Foundation
@@ -21,22 +24,26 @@ enum ControlError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .socket(let e): return "control socket failed: \(String(cString: strerror(e)))"
-        case .bind(let e): return "control bind failed: \(String(cString: strerror(e)))"
-        case .connect(let e): return "control connect failed: \(String(cString: strerror(e)))"
-        case .address(let a): return "bad control address: \(a)"
+        case .socket(let e): return "control socket failed: " + String(cString: strerror(e))
+        case .bind(let e): return "control bind failed: " + String(cString: strerror(e))
+        case .connect(let e): return "control connect failed: " + String(cString: strerror(e))
+        case .address(let a): return "bad control address: " + a
         }
     }
 }
 
 final class ControlChannel {
-    /// Delivered on the reading queue.
+    /// Everything arriving on the channel, delivered on the read queue.
     var onMessage: ((ControlMessage) -> Void)?
+    /// Host side: called once a client connects, with the address its video
+    /// should be sent to. The host learns the peer rather than being told.
+    var onConnected: ((String) -> Void)?
 
     private var fd: Int32 = -1
-    private let queue = DispatchQueue(label: "dz.control", qos: .userInteractive)
-    private var buffer = Data()
     private let lock = NSLock()
+    private let readQueue = DispatchQueue(label: "dz.control.read", qos: .userInteractive)
+    private let writeQueue = DispatchQueue(label: "dz.control.write", qos: .userInteractive)
+    private var buffer = Data()
 
     /// Client side: connects to a host.
     init(host: String, port: UInt16) throws {
@@ -61,13 +68,12 @@ final class ControlChannel {
             let e = errno; Darwin.close(fd); fd = -1
             throw ControlError.connect(e)
         }
-        // Input is small and latency matters more than throughput.
         var nodelay: Int32 = 1
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, socklen_t(MemoryLayout<Int32>.size))
+        boundWrite()
     }
 
-    /// Host side: binds and waits. Kept synchronous and explicit so the caller
-    /// controls when a session starts accepting.
+    /// Host side: binds and waits.
     static func listen(port: UInt16) throws -> ControlChannel {
         let channel = try ControlChannel()
         var one: Int32 = 1
@@ -90,12 +96,14 @@ final class ControlChannel {
         fd = socket(AF_INET, SOCK_STREAM, 0)
     }
 
-    /// Called on the host once a client connects, with the address its video
-    /// should be sent to. The host learns the peer here rather than being told.
-    var onConnected: ((String) -> Void)?
+    /// A stalled peer must not hold the write queue forever.
+    private func boundWrite() {
+        var tv = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    }
 
-    /// Accepts one client and starts reading from it. Blocks until someone
-    /// connects, so call it off the main thread.
+    /// Accepts one client then reads from it. Blocks, so call it off the main
+    /// thread.
     func acceptAndRead() throws {
         var caddr = sockaddr_in()
         var len = socklen_t(MemoryLayout<sockaddr_in>.size)
@@ -110,47 +118,51 @@ final class ControlChannel {
         }
         var one: Int32 = 1
         setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+
+        lock.lock()
         Darwin.close(fd)
         fd = client
+        boundWrite()
+        lock.unlock()
         readLoop()
     }
 
-    /// Starts reading without blocking the caller; used on the client side.
-    func startReading() {
-        queue.async { [weak self] in self?.readLoop() }
+    @discardableResult
+    func send(_ event: InputEvent) -> Bool { enqueue(.input(event)) }
+    @discardableResult
+    func send(stats: SessionStats) -> Bool { enqueue(.stats(stats)) }
+
+    private func enqueue(_ message: ControlMessage) -> Bool {
+        guard let framed = ControlFraming.encode(message) else { return false }
+        writeQueue.async { [weak self] in self?.write(framed) }
+        return true
     }
 
-    /// Sends one input event. Returns false if the channel is closed.
-    @discardableResult
-    func send(_ event: InputEvent) -> Bool { send(.input(event)) }
-
-    /// Sends host statistics back to the client.
-    @discardableResult
-    func send(stats: SessionStats) -> Bool { send(.stats(stats)) }
-
-    @discardableResult
-    private func send(_ message: ControlMessage) -> Bool {
-        guard let framed = ControlFraming.encode(message) else { return false }
+    private func write(_ framed: Data) {
+        let bytes = [UInt8](framed)
         lock.lock()
         defer { lock.unlock() }
-        guard fd >= 0 else { return false }
+        guard fd >= 0 else { return }
         var sent = 0
-        let bytes = [UInt8](framed)
         while sent < bytes.count {
             let n = bytes.withUnsafeBufferPointer { ptr in
                 Darwin.send(fd, ptr.baseAddress! + sent, bytes.count - sent, 0)
             }
             if n > 0 { sent += n; continue }
             if n < 0 && errno == EINTR { continue }
-            return false
+            return
         }
-        return true
     }
 
     private func readLoop() {
         var chunk = [UInt8](repeating: 0, count: 16 * 1024)
         while true {
-            let n = recv(fd, &chunk, chunk.count, 0)
+            lock.lock()
+            let current = fd
+            lock.unlock()
+            guard current >= 0 else { break }
+
+            let n = recv(current, &chunk, chunk.count, 0)
             if n > 0 {
                 buffer.append(contentsOf: chunk[0..<n])
                 for message in ControlFraming.drain(&buffer) { onMessage?(message) }
@@ -159,8 +171,7 @@ final class ControlChannel {
             if n < 0 && errno == EINTR { continue }
             break
         }
-        Darwin.close(fd)
-        fd = -1
+        close()
     }
 
     func close() {

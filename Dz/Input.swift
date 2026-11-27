@@ -2,7 +2,9 @@ import CoreGraphics
 import Darwin
 
 // MARK: – event input
-let dzSyntheticEventTag: Int64 = 0x43554131
+/// ASCII "DZ01". Written into every synthetic event so dz's own human input
+/// monitor can tell agent input from the user's.
+let dzSyntheticEventTag: Int64 = 0x445A3031
 func tagSynthetic(_ e: CGEvent) {
     e.setIntegerValueField(.eventSourceUserData, value: dzSyntheticEventTag)
 }

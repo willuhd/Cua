@@ -196,7 +196,10 @@ final class ClientSession {
         self.settings = try settings.validated()
         self.decoder = try AV1Decoder()
         self.receiver = try VideoReceiver(port: videoPort)
-        self.assembler = FrameAssembler()
+        // A frame that never completes should be given up on after roughly the
+        // buffer the user pinned, not held until memory notices.
+        let age = Double(settings.jitterFrames) / Double(max(1, settings.frameRate)) * 2
+        self.assembler = FrameAssembler(maxAgeSeconds: max(0.25, age))
         self.control = try ControlChannel(host: host, port: controlPort)
         self.view = StreamView(frame: NSRect(x: 0, y: 0, width: settings.width, height: settings.height))
 
@@ -219,7 +222,11 @@ final class ClientSession {
         while true {
             stateLock.lock(); let alive = running; stateLock.unlock()
             guard alive else { break }
-            guard let packet = receiver.receive(timeout: 0.2) else { continue }
+            guard let packet = receiver.receive(timeout: 0.2) else {
+                // Nothing arriving is exactly when stale frames pile up.
+                assembler.expireStale()
+                continue
+            }
             guard let whole = assembler.ingest(packet) else { continue }
             do {
                 guard let frame = try decoder.decode(whole) else { continue }
