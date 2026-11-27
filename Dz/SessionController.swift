@@ -10,24 +10,6 @@
 
 import Cocoa
 
-/// The profile a session starts with. Pinned, never adjusted: these are the
-/// numbers to beat, chosen for the Intel client at 1080p and a constrained link.
-enum HostSessionDefaults {
-    static var settings: StreamSettings {
-        var s = StreamSettings()
-        s.width = 1920
-        s.height = 1080
-        s.frameRate = 75
-        s.bitrate = 8_000_000
-        s.preset = 10
-        s.rateControl = .cbr
-        s.fecOverhead = 0.2
-        s.jitterFrames = 3
-        s.pointer = .free
-        return s
-    }
-}
-
 final class SessionController: NSObject {
     static let shared = SessionController()
 
@@ -44,6 +26,31 @@ final class SessionController: NSObject {
     var onChange: (() -> Void)?
 
     var isRunning: Bool { role != nil }
+
+    /// Everything the popover needs to render the Remote tab.
+    var snapshot: [String: Any] {
+        var out: [String: Any] = ["role": role?.rawValue ?? "idle", "status": status]
+        switch role {
+        case .host:
+            out["frames"] = host?.framesSent ?? 0
+            out["packets"] = host?.packetsSent ?? 0
+            out["bytes"] = host?.bytesSent ?? 0
+            out["fps"] = host?.measuredFps ?? 0
+            out["skipped"] = host?.framesSkipped ?? 0
+        case .client:
+            out["frames"] = client?.framesShown ?? 0
+            out["dropped"] = client?.framesDropped ?? 0
+            if let stats = client?.hostStats {
+                out["fps"] = stats.fps
+                out["packets"] = stats.packetsSent
+                out["skipped"] = stats.framesSkipped
+                out["targetFps"] = stats.targetFps
+            }
+        case .none:
+            break
+        }
+        return out
+    }
 
     var status: String {
         guard let role else { return "Idle" }

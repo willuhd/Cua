@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func startHosting() {
-        SessionController.shared.startHosting(settings: HostSessionDefaults.settings)
+        SessionController.shared.startHosting(settings: StreamProfile.load())
     }
 
     @objc private func connectToHost() {
@@ -106,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let address = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !address.isEmpty else { return }
-        SessionController.shared.connect(to: address, settings: HostSessionDefaults.settings)
+        SessionController.shared.connect(to: address, settings: StreamProfile.load())
     }
 
     @objc private func stopSession() {

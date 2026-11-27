@@ -474,7 +474,10 @@ final class MCPServer: NSObject {
             let ax = AXIsProcessTrusted(); let scr = CGPreflightScreenCaptureAccess()
             let missing = [ax ? nil : "Accessibility", scr ? nil : "Screen Recording"].compactMap { $0 }.joined(separator: " + ")
             let perms = (ax && scr) ? "Permissions OK (Accessibility + Screen Recording)." : "Missing: \(missing). Grant as dz.app via the button below."
+            let profileSnapshot = StreamProfile.load()
             let payload: [String: Any] = ["version": dzVersion,
+                                          "session": SessionController.shared.snapshot,
+                                          "stream": StreamProfile.json(profileSnapshot),
                                           "port": Int(port), "url": "http://127.0.0.1:\(port)/mcp", "perms": perms,
                                           "ax": ax, "scr": scr, "sessions": sessions, "apps": apps,
                                           "appIcon": iconBase64Cached(pid: getpid()),
@@ -533,6 +536,33 @@ final class MCPServer: NSObject {
             }
             let payload: [String: Any] = ["ok": ok, "foreground": ForegroundCoordinator.shared.status()]
             send(fd, status: ok ? "200 OK" : "409 Conflict", body: jsonData(payload), extraHeaders: [:])
+            return
+        }
+        if pathOnly == "/api/settings" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
+            let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+            let updated = StreamProfile.save(StreamProfile.apply(obj, to: StreamProfile.load()))
+            let payload: [String: Any] = ["ok": true, "stream": StreamProfile.json(updated)]
+            send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
+            return
+        }
+        if pathOnly == "/api/session" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
+            let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+            let action = (obj["action"] as? String ?? "").lowercased()
+            let address = (obj["address"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let profile = StreamProfile.load()
+            // Starting a session touches AppKit, so it belongs on the main thread.
+            DispatchQueue.main.async {
+                switch action {
+                case "host": SessionController.shared.startHosting(settings: profile)
+                case "client" where !address.isEmpty: SessionController.shared.connect(to: address, settings: profile)
+                case "stop": SessionController.shared.stop()
+                default: break
+                }
+            }
+            let payload: [String: Any] = ["ok": true, "requested": action]
+            send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
             return
         }
         if pathOnly == "/api/port" && req.method == "POST" {
