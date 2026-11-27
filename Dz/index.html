@@ -294,8 +294,28 @@ function renderRemote(s){
     P.append(row);
   }
 
-  P.append(el('div','group','Remote'));
-  P.append(el('div','note','Files and the remote MCP endpoint arrive with the filesystem work; they are not wired yet.'));
+  const remote = s.remote || {};
+  P.append(el('div','group','Agent endpoint'));
+  const state = el('div','stat');
+  state.append(el('span','','Shared over the tailnet'),
+                el('span','', remote.expose ? 'on' : 'off'));
+  P.append(state);
+  if (remote.expose) {
+    const addr = remote.address || 'no tailnet address';
+    const url = el('div','stat');
+    url.append(el('span','','URL'), el('span','', 'http://' + addr + ':' + (s.port || 3060) + '/mcp'));
+    P.append(url);
+    const tok = el('div','stat');
+    tok.append(el('span','','Token'), el('span','', remote.token || ''));
+    P.append(tok);
+    P.append(el('div','note','Send it as an Authorization: Bearer header. Tailscale proves which device is calling, not who is using it.'));
+  }
+  const toggle = el('button', remote.expose ? '' : 'primary', remote.expose ? 'Stop Sharing Endpoint' : 'Share Agent Endpoint');
+  toggle.type = 'button';
+  toggle.onclick = () => postJSON('/api/remote', {expose: !remote.expose}).then(refresh);
+  const rowE = el('div','actions');
+  rowE.append(toggle);
+  P.append(rowE);
 }
 
 // ---------- settings ----------
