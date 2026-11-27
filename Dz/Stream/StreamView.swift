@@ -132,4 +132,102 @@ final class StreamView: NSView {
         commandBuffer.commit()
         _ = device
     }
+
+    // MARK: - Input
+
+    /// Everything the user does in this view, for the client to ship to the host.
+    var onInput: ((InputEvent) -> Void)?
+
+    /// Locked confines and hides the cursor for games; free is ordinary desktop use.
+    var pointerCapture: PointerCapture = .free {
+        didSet { applyPointerCapture() }
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.makeFirstResponder(self)
+        if trackingAreas.isEmpty {
+            addTrackingArea(NSTrackingArea(rect: .zero,
+                                           options: [.activeInKeyWindow, .mouseMoved, .inVisibleRect],
+                                           owner: self, userInfo: nil))
+        }
+        applyPointerCapture()
+    }
+
+    private func applyPointerCapture() {
+        switch pointerCapture {
+        case .locked:
+            CGAssociateMouseAndMouseCursorPosition(0)
+            NSCursor.hide()
+        case .free:
+            CGAssociateMouseAndMouseCursorPosition(1)
+            NSCursor.unhide()
+        }
+    }
+
+    /// Position in the session, normalised 0...1 from the top-left of the view.
+    private func normalized(_ point: NSPoint) -> (Double, Double) {
+        guard bounds.width > 0, bounds.height > 0 else { return (0, 0) }
+        return (Double(point.x / bounds.width), Double(point.y / bounds.height))
+    }
+
+    /// NSEvent carries Fn as .function; CGEvent calls it maskSecondaryFn. This
+    /// mapping is the thing the game-streaming protocols have no slot for.
+    private func cgFlags(_ flags: NSEvent.ModifierFlags) -> UInt64 {
+        var out: CGEventFlags = []
+        if flags.contains(.shift) { out.insert(.maskShift) }
+        if flags.contains(.control) { out.insert(.maskControl) }
+        if flags.contains(.option) { out.insert(.maskAlternate) }
+        if flags.contains(.command) { out.insert(.maskCommand) }
+        if flags.contains(.function) { out.insert(.maskSecondaryFn) }
+        if flags.contains(.capsLock) { out.insert(.maskAlphaShift) }
+        return out.rawValue
+    }
+
+    private func keyEvent(_ kind: InputEvent.Kind, _ event: NSEvent) -> InputEvent {
+        var out = InputEvent(kind: kind)
+        out.code = event.keyCode
+        out.flags = cgFlags(event.modifierFlags)
+        if kind != .flagsChanged { out.characters = event.characters }
+        out.timestampMicros = DispatchTime.now().uptimeNanoseconds / 1000
+        return out
+    }
+
+    private func mouseEvent(_ kind: InputEvent.Kind, _ event: NSEvent, button: UInt16 = 0) -> InputEvent {
+        var out = InputEvent(kind: kind)
+        out.code = button
+        out.flags = cgFlags(event.modifierFlags)
+        let (x, y) = normalized(convert(event.locationInWindow, from: nil))
+        out.x = x
+        out.y = y
+        if pointerCapture == .locked {
+            out.dx = Double(event.deltaX)
+            out.dy = Double(event.deltaY)
+        }
+        out.timestampMicros = DispatchTime.now().uptimeNanoseconds / 1000
+        return out
+    }
+
+    override func keyDown(with event: NSEvent) { onInput?(keyEvent(.keyDown, event)) }
+    override func keyUp(with event: NSEvent) { onInput?(keyEvent(.keyUp, event)) }
+    override func flagsChanged(with event: NSEvent) { onInput?(keyEvent(.flagsChanged, event)) }
+
+    override func mouseMoved(with event: NSEvent) { onInput?(mouseEvent(.mouseMove, event)) }
+    override func mouseDragged(with event: NSEvent) { onInput?(mouseEvent(.mouseDrag, event)) }
+    override func mouseDown(with event: NSEvent) { onInput?(mouseEvent(.mouseDown, event)) }
+    override func mouseUp(with event: NSEvent) { onInput?(mouseEvent(.mouseUp, event)) }
+    override func rightMouseDown(with event: NSEvent) { onInput?(mouseEvent(.mouseDown, event, button: 1)) }
+    override func rightMouseUp(with event: NSEvent) { onInput?(mouseEvent(.mouseUp, event, button: 1)) }
+    override func otherMouseDown(with event: NSEvent) { onInput?(mouseEvent(.mouseDown, event, button: 2)) }
+    override func otherMouseUp(with event: NSEvent) { onInput?(mouseEvent(.mouseUp, event, button: 2)) }
+
+    override func scrollWheel(with event: NSEvent) {
+        var out = mouseEvent(.scroll, event)
+        out.dx = Double(event.scrollingDeltaX)
+        out.dy = Double(event.scrollingDeltaY)
+        onInput?(out)
+    }
+
 }
