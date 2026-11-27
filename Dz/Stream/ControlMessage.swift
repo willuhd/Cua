@@ -86,7 +86,10 @@ enum ControlFraming {
                 return messages
             }
             guard buffer.count >= 4 + length else { break }
-            let body = buffer.subdata(in: 4..<(4 + length))
+            // Data indices are not zero-based once anything has been removed,
+            // so the slice has to be expressed from startIndex.
+            let start = buffer.startIndex
+            let body = buffer.subdata(in: (start + 4)..<(start + 4 + length))
             buffer.removeFirst(4 + length)
             if let message = try? JSONDecoder().decode(ControlMessage.self, from: body) {
                 messages.append(message)

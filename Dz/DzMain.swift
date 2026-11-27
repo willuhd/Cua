@@ -36,6 +36,9 @@ struct DzMain {
         if CommandLine.arguments.contains("--selftest") {
             exit(SelfTest.run())
         }
+        if CommandLine.arguments.contains("--capture-check") {
+            exit(SelfTest.captureCheck())
+        }
         let app = NSApplication.shared
         let d = AppDelegate()
         app.delegate = d
