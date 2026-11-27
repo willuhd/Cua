@@ -70,46 +70,77 @@ final class AV1Encoder {
     func encode(nv12: UnsafeMutableRawPointer, byteCount: Int) throws -> [Data] {
         guard let component else { throw EncodeError.setup("encoder closed") }
 
+        // SVT dereferences p_buffer as an EbSvtIOFormat, so the planes have to
+        // be described rather than handed over as one flat block.
+        let w = settings.width, h = settings.height
+        let lumaBytes = w * h
+        let chromaBytes = (w / 2) * (h / 2)
+
         let hdr = UnsafeMutablePointer<EbBufferHeaderType>.allocate(capacity: 1)
         hdr.initialize(to: EbBufferHeaderType())
+        let planes = UnsafeMutablePointer<EbSvtIOFormat>.allocate(capacity: 1)
+        planes.initialize(to: EbSvtIOFormat())
         let pixels = UnsafeMutableRawPointer.allocate(byteCount: byteCount, alignment: 64)
         pixels.copyMemory(from: nv12, byteCount: byteCount)
         inFlight.append(UnsafeMutableRawPointer(hdr))
+        inFlight.append(UnsafeMutableRawPointer(planes))
         inFlight.append(pixels)
 
+        let base = pixels.assumingMemoryBound(to: UInt8.self)
+        planes.pointee.luma = base
+        // NV12: chroma is interleaved after luma, cb and cr straddle each pair.
+        planes.pointee.cb = base + lumaBytes
+        planes.pointee.cr = base + lumaBytes + 1
+        planes.pointee.y_stride = UInt32(w)
+        planes.pointee.cb_stride = UInt32(w / 2)
+        planes.pointee.cr_stride = UInt32(w / 2)
+
         hdr.pointee.size = UInt32(MemoryLayout<EbBufferHeaderType>.size)
-        hdr.pointee.p_buffer = pixels.assumingMemoryBound(to: UInt8.self)
+        hdr.pointee.p_buffer = UnsafeMutableRawPointer(planes).assumingMemoryBound(to: UInt8.self)
         hdr.pointee.n_filled_len = UInt32(byteCount)
         hdr.pointee.n_alloc_len = UInt32(byteCount)
+        hdr.pointee.pic_type = EB_AV1_INVALID_PICTURE
         hdr.pointee.pts = pts
         pts += 1
+        _ = (lumaBytes, chromaBytes)
 
         let sent = svt_av1_enc_send_picture(component, hdr)
         guard sent == EB_ErrorNone else { throw EncodeError.send(sent.rawValue) }
-        return try drain(component)
+        // One picture in, at most one packet out. Asking twice would block,
+        // because the encoder has nothing more queued.
+        if let packet = try nextPacket(component, flushing: false) { return [packet] }
+        return []
     }
 
-    /// Flushes the pipeline at end of stream.
+    /// Sends end of stream and drains everything still inside the encoder.
     func finish() throws -> [Data] {
         guard let component else { return [] }
-        _ = svt_av1_enc_send_picture(component, nil)
-        return try drain(component)
+        // End of stream is a header carrying the flag, not a null pointer.
+        let eos = UnsafeMutablePointer<EbBufferHeaderType>.allocate(capacity: 1)
+        eos.initialize(to: EbBufferHeaderType())
+        eos.pointee.size = UInt32(MemoryLayout<EbBufferHeaderType>.size)
+        eos.pointee.flags = UInt32(EB_BUFFERFLAG_EOS)
+        eos.pointee.pic_type = EB_AV1_INVALID_PICTURE
+        inFlight.append(UnsafeMutableRawPointer(eos))
+        _ = svt_av1_enc_send_picture(component, eos)
+        var out: [Data] = []
+        while let packet = try nextPacket(component, flushing: true) { out.append(packet) }
+        return out
     }
 
-    private func drain(_ component: UnsafeMutablePointer<EbComponentType>) throws -> [Data] {
-        var out: [Data] = []
-        while true {
-            var packet: UnsafeMutablePointer<EbBufferHeaderType>? = nil
-            let got = svt_av1_enc_get_packet(component, &packet, UInt8(0))
-            guard got == EB_ErrorNone, packet != nil else { break }
-            let eos = packet!.pointee.flags & UInt32(EB_BUFFERFLAG_EOS) != 0
-            if let buffer = packet!.pointee.p_buffer, packet!.pointee.n_filled_len > 0 {
-                out.append(Data(bytes: buffer, count: Int(packet!.pointee.n_filled_len)))
-            }
-            _ = svt_av1_enc_release_out_buffer(&packet)
-            if eos { break }
+    /// Returns one packet, or nil when the encoder has nothing ready.
+    private func nextPacket(_ component: UnsafeMutablePointer<EbComponentType>,
+                            flushing: Bool) throws -> Data? {
+        var packet: UnsafeMutablePointer<EbBufferHeaderType>? = nil
+        let got = svt_av1_enc_get_packet(component, &packet, UInt8(flushing ? 1 : 0))
+        guard got == EB_ErrorNone, packet != nil else { return nil }
+        let eos = packet!.pointee.flags & UInt32(EB_BUFFERFLAG_EOS) != 0
+        var data: Data? = nil
+        if let buffer = packet!.pointee.p_buffer, packet!.pointee.n_filled_len > 0 {
+            data = Data(bytes: buffer, count: Int(packet!.pointee.n_filled_len))
         }
-        return out
+        _ = svt_av1_enc_release_out_buffer(&packet)
+        return eos && data == nil ? nil : data
     }
 
     deinit {
