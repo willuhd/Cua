@@ -260,6 +260,44 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Dz/Stream/CodecBridge.h";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/.agents/tools/dav1d-1.5.1/include",
+					"$(SRCROOT)/.agents/tools/SVT-AV1-3.1.2/Source/API",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(SRCROOT)/.agents/tools/dav1d-1.5.1/build/src",
+					"$(SRCROOT)/.agents/tools/SVT-AV1-3.1.2/Bin/Release",
+				);
+				OTHER_LDFLAGS = (
+					"-ldav1d",
+					"-lSvtAv1Enc",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"$(SRCROOT)/.agents/tools/dav1d-1.5.1/build/src",
+					"$(SRCROOT)/.agents/tools/SVT-AV1-3.1.2/Bin/Release",
+				);
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Dz/Stream/CodecBridge.h";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/.agents/tools/dav1d-1.5.1/include",
+					"$(SRCROOT)/.agents/tools/SVT-AV1-3.1.2/Source/API",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(SRCROOT)/.agents/tools/dav1d-1.5.1/build/src",
+					"$(SRCROOT)/.agents/tools/SVT-AV1-3.1.2/Bin/Release",
+				);
+				OTHER_LDFLAGS = (
+					"-ldav1d",
+					"-lSvtAv1Enc",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"$(SRCROOT)/.agents/tools/dav1d-1.5.1/build/src",
+					"$(SRCROOT)/.agents/tools/SVT-AV1-3.1.2/Bin/Release",
+				);
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Menubar MCP. Background computer-use for macOS.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
