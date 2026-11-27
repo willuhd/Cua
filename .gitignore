@@ -26,3 +26,6 @@ Temporary Items
 # Xcode user state stays out of the repo
 *.xcuserstate
 xcuserdata/
+
+# vendored build tools for this project only
+.agents/
