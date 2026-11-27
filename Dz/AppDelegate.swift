@@ -52,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: NSWorkspace.didTerminateApplicationNotification,
             object: nil, queue: .main
         ) { [weak self] _ in self?.popVC.updateTable() }
+        MCPServer.bindAll = MCPServer.expose
         MCPServer.shared.start(port: MCPServer.shared.port)
         DispatchQueue.main.async { [weak self] in _ = self?.popVC?.view }
         clog("launched, MCP on 127.0.0.1:\(MCPServer.shared.port)")

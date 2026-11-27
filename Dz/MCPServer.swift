@@ -94,6 +94,50 @@ final class MCPServer: NSObject {
     /// Injected into the menubar WKWebView only. It is deliberately not served
     /// over HTTP, so an MCP client cannot approve its own foreground request.
     let uiToken = UUID().uuidString
+    /// Set when the user shares this Mac's MCP endpoint beyond loopback.
+    static var bindAll = false
+    /// Required on every /mcp call while the endpoint is shared. Generated once
+    /// and kept, because a token that changes on launch is not a token.
+    /// Whether the endpoint is shared beyond this machine.
+    static var expose: Bool {
+        get { UserDefaults.standard.bool(forKey: "dz.mcp.expose") }
+        set { UserDefaults.standard.set(newValue, forKey: "dz.mcp.expose") }
+    }
+
+    /// First non-loopback IPv4 on a tunnel interface, which on this setup is
+    /// the tailnet address. Nil when the tailnet is down.
+    static func sharedAddress() -> String? {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return nil }
+        defer { freeifaddrs(head) }
+        var result: String?
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let entry = cursor {
+            defer { cursor = entry.pointee.ifa_next }
+            guard let addr = entry.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) else { continue }
+            let name = String(cString: entry.pointee.ifa_name)
+            guard name.hasPrefix("utun") else { continue }
+            var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            var raw = addr.pointee
+            withUnsafePointer(to: &raw) { ptr in
+                ptr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin in
+                    var address = sin.pointee.sin_addr
+                    _ = inet_ntop(AF_INET, &address, &buffer, socklen_t(INET_ADDRSTRLEN))
+                }
+            }
+            let text = String(cString: buffer)
+            if text.hasPrefix("100.") { result = text; break }
+        }
+        return result
+    }
+
+    static var remoteToken: String = {
+        let key = "dz.mcp.token"
+        if let existing = UserDefaults.standard.string(forKey: key) { return existing }
+        let fresh = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        UserDefaults.standard.set(fresh, forKey: key)
+        return fresh
+    }()
     // The listening socket and port are written on the main thread (start/stop, /api/port) and
     // read by the accept loop and the socket workers, so they are lock-backed. The generation
     // counter retires a superseded accept loop before it can accept on a recycled fd number.
@@ -213,7 +257,9 @@ final class MCPServer: NSObject {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = UInt16(port).bigEndian
-        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        // Loopback unless the user has explicitly shared this Mac's endpoint
+        // over the tailnet, which also requires the bearer token below.
+        addr.sin_addr.s_addr = MCPServer.bindAll ? INADDR_ANY : inet_addr("127.0.0.1")
         let ok = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sptr in
                 Darwin.bind(fd, sptr, socklen_t(MemoryLayout<sockaddr_in>.size))
@@ -424,6 +470,17 @@ final class MCPServer: NSObject {
         let pathOnly = String(req.path.split(separator: "?")[0])
         let host = req.headers["host"]
         let origin = req.headers["origin"]
+        // A shared endpoint answers only to the bearer token. Tailscale
+        // authenticates devices, not people, so a stolen device would
+        // otherwise drive this Mac.
+        if Self.bindAll, pathOnly == "/mcp" {
+            let presented = req.headers["authorization"] ?? ""
+            let expected = "Bearer " + Self.remoteToken
+            if presented != expected {
+                send(fd, status: "401 Unauthorized", body: Data("{\"error\":\"bearer token required\"}".utf8), extraHeaders: [:])
+                return
+            }
+        }
         if !Self.allowedHost(host, port: port) {
             send(fd, status: "403 Forbidden", body: Data("{\"error\":\"invalid host\"}".utf8))
             return
@@ -482,7 +539,10 @@ final class MCPServer: NSObject {
                                           "ax": ax, "scr": scr, "sessions": sessions, "apps": apps,
                                           "appIcon": iconBase64Cached(pid: getpid()),
                                           "appPath": Bundle.main.bundleURL.path,
-                                          "foreground": ForegroundCoordinator.shared.status()]
+                                          "foreground": ForegroundCoordinator.shared.status(),
+                                          "remote": ["expose": MCPServer.expose,
+                                                     "token": MCPServer.remoteToken,
+                                                     "address": MCPServer.sharedAddress() ?? ""]]
             send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: ["Cache-Control": "no-store"])
             return
         }
@@ -562,6 +622,23 @@ final class MCPServer: NSObject {
                 }
             }
             let payload: [String: Any] = ["ok": true, "requested": action]
+            send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
+            return
+        }
+        if pathOnly == "/api/remote" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
+            let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+            let expose = (obj["expose"] as? Bool) ?? false
+            MCPServer.expose = expose
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                MCPServer.bindAll = expose
+                self.stop()
+                self.start(port: self.port)
+            }
+            let payload: [String: Any] = ["ok": true, "expose": expose,
+                                          "token": MCPServer.remoteToken,
+                                          "address": MCPServer.sharedAddress() ?? ""]
             send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
             return
         }
