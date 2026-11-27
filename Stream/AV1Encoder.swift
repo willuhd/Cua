@@ -65,44 +65,50 @@ final class AV1Encoder {
         guard started == EB_ErrorNone else { throw EncodeError.setup("init(\(started.rawValue))") }
     }
 
-    /// Hands one NV12 frame to the encoder. Returns whatever packets come back
-    /// immediately; the encoder may return none while it fills its pipeline.
-    func encode(nv12: UnsafeMutableRawPointer, byteCount: Int) throws -> [Data] {
+    /// Hands one frame to the encoder as three planar buffers.
+    ///
+    /// SVT reads chroma as two separate planes whose stride is the chroma
+    /// width, so interleaved NV12 would encode as valid video with the colour
+    /// planes reading from the wrong place. Planes are described explicitly and
+    /// copied row by row, because a captured buffer's stride is usually wider
+    /// than its width.
+    func encode(luma: UnsafeRawPointer, cb: UnsafeRawPointer, cr: UnsafeRawPointer,
+                yStride: Int, cbStride: Int, crStride: Int) throws -> [Data] {
         guard let component else { throw EncodeError.setup("encoder closed") }
-
-        // SVT dereferences p_buffer as an EbSvtIOFormat, so the planes have to
-        // be described rather than handed over as one flat block.
         let w = settings.width, h = settings.height
-        let lumaBytes = w * h
-        let chromaBytes = (w / 2) * (h / 2)
+        let chromaRows = h / 2
+        let total = yStride * h + (cbStride + crStride) * chromaRows
 
         let hdr = UnsafeMutablePointer<EbBufferHeaderType>.allocate(capacity: 1)
         hdr.initialize(to: EbBufferHeaderType())
         let planes = UnsafeMutablePointer<EbSvtIOFormat>.allocate(capacity: 1)
         planes.initialize(to: EbSvtIOFormat())
-        let pixels = UnsafeMutableRawPointer.allocate(byteCount: byteCount, alignment: 64)
-        pixels.copyMemory(from: nv12, byteCount: byteCount)
+        let packed = UnsafeMutableRawPointer.allocate(byteCount: total, alignment: 64)
         inFlight.append(UnsafeMutableRawPointer(hdr))
         inFlight.append(UnsafeMutableRawPointer(planes))
-        inFlight.append(pixels)
+        inFlight.append(packed)
 
-        let base = pixels.assumingMemoryBound(to: UInt8.self)
+        let base = packed.assumingMemoryBound(to: UInt8.self)
+        base.update(from: luma.assumingMemoryBound(to: UInt8.self), count: yStride * h)
+        let cbBase = base + yStride * h
+        cbBase.update(from: cb.assumingMemoryBound(to: UInt8.self), count: cbStride * chromaRows)
+        let crBase = cbBase + cbStride * chromaRows
+        crBase.update(from: cr.assumingMemoryBound(to: UInt8.self), count: crStride * chromaRows)
+
         planes.pointee.luma = base
-        // NV12: chroma is interleaved after luma, cb and cr straddle each pair.
-        planes.pointee.cb = base + lumaBytes
-        planes.pointee.cr = base + lumaBytes + 1
-        planes.pointee.y_stride = UInt32(w)
-        planes.pointee.cb_stride = UInt32(w / 2)
-        planes.pointee.cr_stride = UInt32(w / 2)
+        planes.pointee.cb = cbBase
+        planes.pointee.cr = crBase
+        planes.pointee.y_stride = UInt32(yStride)
+        planes.pointee.cb_stride = UInt32(cbStride)
+        planes.pointee.cr_stride = UInt32(crStride)
 
         hdr.pointee.size = UInt32(MemoryLayout<EbBufferHeaderType>.size)
         hdr.pointee.p_buffer = UnsafeMutableRawPointer(planes).assumingMemoryBound(to: UInt8.self)
-        hdr.pointee.n_filled_len = UInt32(byteCount)
-        hdr.pointee.n_alloc_len = UInt32(byteCount)
+        hdr.pointee.n_filled_len = UInt32(total)
+        hdr.pointee.n_alloc_len = UInt32(total)
         hdr.pointee.pic_type = EB_AV1_INVALID_PICTURE
         hdr.pointee.pts = pts
         pts += 1
-        _ = (lumaBytes, chromaBytes)
 
         let sent = svt_av1_enc_send_picture(component, hdr)
         guard sent == EB_ErrorNone else { throw EncodeError.send(sent.rawValue) }
@@ -110,6 +116,26 @@ final class AV1Encoder {
         // because the encoder has nothing more queued.
         if let packet = try nextPacket(component, flushing: false) { return [packet] }
         return []
+    }
+
+    /// Convenience for a converted buffer.
+    func encode(frame: I420Frame) throws -> [Data] {
+        try encode(luma: UnsafeRawPointer(frame.luma),
+                   cb: UnsafeRawPointer(frame.cb),
+                   cr: UnsafeRawPointer(frame.cr),
+                   yStride: frame.lumaStride,
+                   cbStride: frame.cbStride,
+                   crStride: frame.crStride)
+    }
+
+    /// Convenience for a tightly packed I420 frame, used by tests.
+    func encode(i420: UnsafeMutableRawPointer) throws -> [Data] {
+        let w = settings.width, h = settings.height, half = UInt32(w / 2)
+        let lumaBytes = w * h
+        return try encode(luma: UnsafeRawPointer(i420),
+                          cb: UnsafeRawPointer(i420 + lumaBytes),
+                          cr: UnsafeRawPointer(i420 + lumaBytes + (w / 2) * (h / 2)),
+                          yStride: w, cbStride: Int(half), crStride: Int(half))
     }
 
     /// Sends end of stream and drains everything still inside the encoder.
