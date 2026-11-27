@@ -1,2 +1,2 @@
-# Cua
-SkyLight MCP wrapper with parallel app control
+# dz
+Remote desktop and computer use, in one menubar app.

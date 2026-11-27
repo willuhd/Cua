@@ -1,8 +1,8 @@
 import Cocoa
 import WebKit
 
-// MARK: - web UI (Cua/index.html, transparent over native glass)
-// Single source of truth is Cua/index.html, copied into the bundle as a
+// MARK: - web UI (dz/index.html, transparent over native glass)
+// Single source of truth is dz/index.html, copied into the bundle as a
 // resource. At runtime try, in order: the bundled copy, then the file beside
 // the sources (#filePath, dev), then a minimal fallback so the server never
 // returns an empty page.
@@ -19,7 +19,7 @@ let webUIHTML: String = {
         return s
     }
     // 3) fallback: server is up, UI file missing - keep the page non-empty
-    return "<!DOCTYPE html><html><body><h1>Cua</h1><p>UI file (index.html) not found. Server is running.</p></body></html>"
+    return "<!DOCTYPE html><html><body><h1>dz</h1><p>UI file (index.html) not found. Server is running.</p></body></html>"
 }()
 
 // MARK: – native drag source for the permission icon
@@ -68,11 +68,11 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
 
         let wm = WKWebViewConfiguration()
         wm.websiteDataStore = .nonPersistent()
-        wm.userContentController.add(self, name: "cuaHeight")
-        wm.userContentController.add(self, name: "cuaPermRect")
+        wm.userContentController.add(self, name: "dzHeight")
+        wm.userContentController.add(self, name: "dzPermRect")
         let token = MCPServer.shared.uiToken.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
-        let tokenScript = WKUserScript(source: "window.__CUA_UI_TOKEN = \"\(token)\"",
+        let tokenScript = WKUserScript(source: "window.__DZ_UI_TOKEN = \"\(token)\"",
                                        injectionTime: .atDocumentStart, forMainFrameOnly: true)
         wm.userContentController.addUserScript(tokenScript)
         webView = WKWebView(frame: .zero, configuration: wm)
@@ -100,7 +100,7 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        if message.name == "cuaHeight" {
+        if message.name == "dzHeight" {
             let raw: CGFloat
             if let n = message.body as? NSNumber { raw = CGFloat(truncating: n) }
             else if let d = message.body as? Double { raw = CGFloat(d) }
@@ -112,7 +112,7 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
             onHeight?(h)
             return
         }
-        guard message.name == "cuaPermRect", let dict = message.body as? [String: Any] else { return }
+        guard message.name == "dzPermRect", let dict = message.body as? [String: Any] else { return }
         let show = (dict["show"] as? Bool) ?? ((dict["show"] as? NSNumber)?.boolValue ?? false)
         guard show,
               let x = (dict["x"] as? NSNumber)?.doubleValue,

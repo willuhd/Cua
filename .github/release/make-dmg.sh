@@ -7,7 +7,7 @@ if [ "$#" -ne 2 ]; then
     exit 2
 fi
 
-DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-Cua}"
+DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-dz}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

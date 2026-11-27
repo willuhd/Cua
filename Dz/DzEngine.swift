@@ -1,7 +1,7 @@
 import ApplicationServices
 import CoreGraphics
 
-// MARK: – Cua engine (tool call bodies; all in-memory)
+// MARK: – dz engine (tool call bodies; all in-memory)
 struct ToolFailure: Error {
     let result: [String: Any]
 }
@@ -298,7 +298,7 @@ final class DzEngine {
         guard let source = source else {
             return .failure(failure("CAPTURE_FAILED",
                                     "could not capture \(target.wid == 0 ? "the display" : "window \(target.wid)")",
-                                    hint: "Grant Screen Recording to Cua in Settings → Privacy & Security."))
+                                    hint: "Grant Screen Recording to dz in Settings → Privacy & Security."))
         }
         guard let rendered = renderSnapshot(source: source, windowBounds: target.bounds, region: region,
                                              maxDimension: maxDimension, grid: grid,
@@ -547,7 +547,7 @@ final class DzEngine {
         region = region.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
         guard let source = sourceForZoom(s, target: target) else {
             return errorResult("CAPTURE_FAILED", "could not capture the window",
-                               extra: ["hint": "Grant Screen Recording to Cua."])
+                               extra: ["hint": "Grant Screen Recording to dz."])
         }
         let maxDim = clampInt(pInt(params, "maxDimension"), 64, 2560, 2560)
         guard let rendered = renderSnapshot(source: source, windowBounds: target.bounds, region: region,
@@ -938,7 +938,7 @@ final class DzEngine {
         guard let result = axDump(sessionID: s.id, pid: pid, wid: wid, maxDepth: depth, limit: limit,
                                   deadline: Date().addingTimeInterval(10)) else {
             return errorResult("AX_UNAVAILABLE", "could not read the accessibility tree",
-                               extra: ["hint": "Grant Accessibility to Cua and make sure the window still exists."])
+                               extra: ["hint": "Grant Accessibility to dz and make sure the window still exists."])
         }
         if result.timedOut {
             return errorResult("AX_TIMEOUT", "the accessibility walk exceeded 10 seconds",

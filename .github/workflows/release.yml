@@ -19,9 +19,9 @@ permissions:
   contents: write
 
 env:
-  APP_NAME: Cua
-  PROJECT_FILE: Cua.xcodeproj
-  BUILD_TARGET: Cua
+  APP_NAME: dz
+  PROJECT_FILE: Dz.xcodeproj
+  BUILD_TARGET: Dz
   ARCHS: "arm64 x86_64"
 
 jobs:

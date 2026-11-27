@@ -26,7 +26,7 @@ func toolResultImage(png: Data, caption: String, structured: [String: Any]? = ni
 /// Read by the agent before it touches anything. Written for that agent, not
 /// as a description of the source: what to do, in what order, and when to stop.
 let dzInstructions = [
-    "Cua lets you use someone's Mac for them: their pointer, their menus, their windows.",
+    "dz lets you use someone's Mac for them: their pointer, their menus, their windows.",
     "",
     "Start with list_apps, then acquire the app you need. You get an acquisitionId; pass it on every call until you release. By default you work in the background: your clicks and keys reach that app without moving their pointer or raising the window.",
     "",
@@ -76,7 +76,7 @@ func leaseHeldResult(_ s: Session) -> [String: Any] {
         "pid": s.pid,
         "app": s.appName,
         "holder": s.agent ?? "unknown",
-        "hint": "This app is held by another agent. Ask the user to free this app's lease in the Cua menubar UI, then acquire again."
+        "hint": "This app is held by another agent. Ask the user to free this app's lease in the dz menubar UI, then acquire again."
     ]
     let text = (try? JSONSerialization.data(withJSONObject: payload))?.withUnsafeBytes { String(decoding: $0, as: UTF8.self) } ?? "{\"code\":\"LEASE_HELD\"}"
     return toolResultText(text, isError: true, structured: payload)
@@ -122,13 +122,13 @@ final class MCPServer: NSObject {
         get { stateLock.lock(); defer { stateLock.unlock() }; return _port }
         set { stateLock.lock(); _port = newValue; stateLock.unlock() }
     }
-    var queue = DispatchQueue(label: "cua.mcp", qos: .userInitiated, attributes: .concurrent)
+    var queue = DispatchQueue(label: "dz.mcp", qos: .userInitiated, attributes: .concurrent)
     // Control-plane calls (lease changes, listing) are serialized. Read-only
     // lease calls (screenshot/AX/zoom) use a per-lease queue, so two windows
     // can be observed concurrently. Every input gesture takes the one global
     // InputGate, matching the single hardware pointer/focus.
-    let controlQueue = DispatchQueue(label: "cua.control", qos: .userInitiated)
-    let foregroundQueue = DispatchQueue(label: "cua.foreground", qos: .userInitiated)
+    let controlQueue = DispatchQueue(label: "dz.control", qos: .userInitiated)
+    let foregroundQueue = DispatchQueue(label: "dz.foreground", qos: .userInitiated)
     private let leaseQueueLock = NSLock()
     private var leaseQueues: [String: DispatchQueue] = [:]
     private let controlTools: Set<String> = ["list_apps", "windows", "acquire", "release",
@@ -143,7 +143,7 @@ final class MCPServer: NSObject {
         let key = id.lowercased()
         leaseQueueLock.lock(); defer { leaseQueueLock.unlock() }
         if let q = leaseQueues[key] { return q }
-        let q = DispatchQueue(label: "cua.lease.\(key)", qos: .userInitiated)
+        let q = DispatchQueue(label: "dz.lease.\(key)", qos: .userInitiated)
         leaseQueues[key] = q
         return q
     }
@@ -246,7 +246,7 @@ final class MCPServer: NSObject {
         clog("listening 127.0.0.1:\(port)")
         onStateChange?()
         if old >= 0 { shutdown(old, SHUT_RDWR); close(old) }
-        let acceptQ = DispatchQueue(label: "cua.accept", qos: .userInitiated)
+        let acceptQ = DispatchQueue(label: "dz.accept", qos: .userInitiated)
         let gen = bumpAcceptGeneration()
         acceptQ.async { [weak self] in
             while let self = self {
@@ -473,7 +473,7 @@ final class MCPServer: NSObject {
             apps.sort { ($0["app"] as? String ?? "") < ($1["app"] as? String ?? "") }
             let ax = AXIsProcessTrusted(); let scr = CGPreflightScreenCaptureAccess()
             let missing = [ax ? nil : "Accessibility", scr ? nil : "Screen Recording"].compactMap { $0 }.joined(separator: " + ")
-            let perms = (ax && scr) ? "Permissions OK (Accessibility + Screen Recording)." : "Missing: \(missing). Grant as Cua.app via the button below."
+            let perms = (ax && scr) ? "Permissions OK (Accessibility + Screen Recording)." : "Missing: \(missing). Grant as dz.app via the button below."
             let payload: [String: Any] = ["version": dzVersion,
                                           "port": Int(port), "url": "http://127.0.0.1:\(port)/mcp", "perms": perms,
                                           "ax": ax, "scr": scr, "sessions": sessions, "apps": apps,
@@ -509,8 +509,8 @@ final class MCPServer: NSObject {
         }
         if pathOnly == "/api/foreground" && req.method == "POST" {
             guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
-            guard req.headers["x-cua-ui-token"] == uiToken else {
-                send(fd, status: "403 Forbidden", body: Data("{\"error\":\"foreground approval must come from the Cua menubar\"}".utf8))
+            guard req.headers["x-dz-ui-token"] == uiToken else {
+                send(fd, status: "403 Forbidden", body: Data("{\"error\":\"foreground approval must come from the dz menubar\"}".utf8))
                 return
             }
             let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
@@ -634,7 +634,7 @@ final class MCPServer: NSObject {
             let sid = UUID().uuidString
             let result: [String: Any] = [
                 "protocolVersion": "2025-06-18",
-                "serverInfo": ["name": "cua-mcp", "version": dzVersion],
+                "serverInfo": ["name": "dz-mcp", "version": dzVersion],
                 "capabilities": ["tools": ["listChanged": false]],
                 "instructions": dzInstructions,
             ]

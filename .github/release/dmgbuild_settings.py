@@ -1,11 +1,11 @@
-# dmgbuild settings for the Cua distributable DMG.
+# dmgbuild settings for the dz distributable DMG.
 # Values decoded from the design build (~/Downloads/Disk Image.dmg, mounted
-# at /Volumes/Cua) — ground truth is the built image's .DS_Store, not the
+# at /Volumes/dz) — ground truth is the built image's .DS_Store, not the
 # DMG Canvas document (documents drift from what ships).
 #
 # Decode notes:
 # - .background/dmgcanvas_bg.tiff: 1328x848 @144dpi = 664x424 pt.
-# - Iloc (top-origin Finder coords): Cua.app (146,171), Applications (459,171).
+# - Iloc (top-origin Finder coords): dz.app (146,171), Applications (459,171).
 #   dmgbuild measures y from the bottom: 360 - 171 = 189.
 # - icvo blob 'nonebotm' -> label position bottom; trailing icon size 128.
 # - icvt (shor) = 13 -> label font size.

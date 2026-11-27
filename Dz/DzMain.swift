@@ -1,5 +1,5 @@
-// Cua — menubar + MCP app (contained, in-memory).
-// Double-click Cua.app -> menubar cursor icon. Click icon -> popover listing
+// dz — menubar + MCP app (contained, in-memory).
+// Double-click dz.app -> menubar cursor icon. Click icon -> popover listing
 // held apps + MCP port field. MCP over streamable HTTP on 127.0.0.1:3060.
 // Everything hot (images, cursor pointers) lives in RAM. No /tmp, no cursor.json.
 //
@@ -17,13 +17,13 @@
 // whole Mac. It runs until released or stopped. Human input invalidates the
 // last screenshot until the agent re-observes. Only one grant can exist.
 //
-// Build: Xcode project (Cua.xcodeproj, target Cua, macOS 14.0, com.willuhd.Cua).
-//   xcodebuild -project Cua.xcodeproj -target Cua -configuration Release build CODE_SIGNING_ALLOWED=NO
-//   XB=$(xcodebuild -project Cua.xcodeproj -showBuildSettings | grep BUILT_PRODUCTS_DIR | awk '{print $3}')
-//   cp -R "$XB/Release/Cua.app" Cua.app
-//   codesign --force -s - --identifier com.willuhd.Cua Cua.app   (ad-hoc; keep id stable for TCC)
+// Build: Xcode project (dz.xcodeproj, target dz, macOS 14.0, com.willuhd.dz).
+//   xcodebuild -project dz.xcodeproj -target dz -configuration Release build CODE_SIGNING_ALLOWED=NO
+//   XB=$(xcodebuild -project dz.xcodeproj -showBuildSettings | grep BUILT_PRODUCTS_DIR | awk '{print $3}')
+//   cp -R "$XB/Release/dz.app" dz.app
+//   codesign --force -s - --identifier com.willuhd.dz dz.app   (ad-hoc; keep id stable for TCC)
 // No ObjC: pure Swift. SkyLight arrives via dlopen, no bridging header.
-// Codesign adhoc; same bundle id com.willuhd.Cua so the one TCC checkbox survives.
+// Codesign adhoc; same bundle id com.willuhd.dz so the one TCC checkbox survives.
 
 // MARK: – entry
 import Cocoa

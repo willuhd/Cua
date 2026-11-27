@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark">
-<title>Cua</title>
+<title>dz</title>
 <style>
   :root{
     --hairline: rgba(127,127,127,.28);
@@ -82,12 +82,12 @@
 </style></head><body>
 <main class="app">
   <div class="head">
-    <h1>Cua</h1>
+    <h1>dz</h1>
     <div class="portbox">
       <input id="port" type="number" min="1024" max="65535" aria-label="MCP port">
       <button id="apply" type="button">Apply</button>
       <button id="copy" type="button" title="Copy setup prompt">Copy</button>
-      <button id="quit" type="button" title="Quit Cua">Quit</button>
+      <button id="quit" type="button" title="Quit dz">Quit</button>
     </div>
   </div>
   <div id="perms"></div>
@@ -105,7 +105,7 @@ const $ = id => document.getElementById(id);
 
 async function postJSON(path, body){
   const headers = {'Content-Type':'application/json'};
-  if (window.__CUA_UI_TOKEN) headers['X-Cua-UI-Token'] = window.__CUA_UI_TOKEN;
+  if (window.__DZ_UI_TOKEN) headers['X-Dz-UI-Token'] = window.__DZ_UI_TOKEN;
   return fetch(path, {method:'POST', headers, body:JSON.stringify(body || {})});
 }
 function el(tag, cls, text){
@@ -115,7 +115,7 @@ function el(tag, cls, text){
   return n;
 }
 function postHeight(){
-  if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.cuaHeight) return;
+  if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.dzHeight) return;
   const head = document.querySelector('.head');
   const perms = $('perms'), fg = $('fg'), list = $('list');
   const listContent = Array.from(list.children).reduce((sum, n) => sum + n.getBoundingClientRect().height, 0);
@@ -123,13 +123,13 @@ function postHeight(){
   const h = Math.max(150, Math.min(420, Math.round(desired)));
   if (h !== lastHeight) {
     lastHeight = h;
-    window.webkit.messageHandlers.cuaHeight.postMessage(h);
+    window.webkit.messageHandlers.dzHeight.postMessage(h);
   }
 }
 function sendPermRect(show, rect){
-  if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.cuaPermRect) return;
-  if (!show || !rect) { window.webkit.messageHandlers.cuaPermRect.postMessage({show:false}); return; }
-  window.webkit.messageHandlers.cuaPermRect.postMessage({
+  if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.dzPermRect) return;
+  if (!show || !rect) { window.webkit.messageHandlers.dzPermRect.postMessage({show:false}); return; }
+  window.webkit.messageHandlers.dzPermRect.postMessage({
     show:true, x:rect.left, y:rect.top, width:rect.width, height:rect.height
   });
 }
@@ -143,9 +143,9 @@ function renderPerms(s){
   if (s.appIcon) {
     const img = el('img');
     img.src = 'data:image/png;base64,' + s.appIcon;
-    img.alt = 'Cua';
+    img.alt = 'dz';
     img.draggable = true;
-    img.title = 'Drag Cua.app into the permission list';
+    img.title = 'Drag dz.app into the permission list';
     img.addEventListener('dragstart', ev => {
       if (!s.appPath) return;
       const uri = encodeURI('file://' + (s.appPath.startsWith('/') ? s.appPath : '/' + s.appPath));
@@ -229,8 +229,8 @@ function renderForeground(s){
   if (fg.mode === 'pending') {
     box.append(el('div','title','Full Mac control request'));
     box.append(el('div','meta', (fg.agent || 'agent') + ' wants full control of this Mac until stopped' + (fg.reason ? ' — ' + fg.reason : '')));
-    if (!window.__CUA_UI_TOKEN) {
-      box.append(el('div','meta','Approve or deny this request in the Cua menubar popover.'));
+    if (!window.__DZ_UI_TOKEN) {
+      box.append(el('div','meta','Approve or deny this request in the dz menubar popover.'));
     }
     const actions = el('div','actions');
     const allow = el('button', null, 'End all background & allow'); allow.type = 'button';
@@ -243,7 +243,7 @@ function renderForeground(s){
     };
     const deny = el('button', null, 'Deny'); deny.type = 'button';
     deny.onclick = async () => { await postJSON('/api/foreground', {action:'deny', requestId:fg.requestId}); refresh(); };
-    if (!window.__CUA_UI_TOKEN) { allow.disabled = true; deny.disabled = true; }
+    if (!window.__DZ_UI_TOKEN) { allow.disabled = true; deny.disabled = true; }
     actions.append(allow, deny);
     box.append(actions);
   } else if (fg.mode === 'active') {
@@ -251,11 +251,11 @@ function renderForeground(s){
     box.append(el('div','meta', (fg.app || 'This Mac') + ' · until stopped'));
     if (fg.observation === 'needs-screenshot') box.append(el('div','meta','Agent needs a first screenshot.'));
     else if (fg.observation === 'stale') box.append(el('div','meta','Screen changed — agent will re-check.'));
-    if (!window.__CUA_UI_TOKEN) box.append(el('div','meta','Stop this grant in the Cua menubar popover.'));
+    if (!window.__DZ_UI_TOKEN) box.append(el('div','meta','Stop this grant in the dz menubar popover.'));
     const actions = el('div','actions');
     const stop = el('button','stop','Stop'); stop.type = 'button';
     stop.onclick = async () => { await postJSON('/api/foreground', {action:'stop'}); refresh(); };
-    if (!window.__CUA_UI_TOKEN) { stop.disabled = true; }
+    if (!window.__DZ_UI_TOKEN) { stop.disabled = true; }
     actions.append(stop);
     box.append(actions);
   }
@@ -308,7 +308,7 @@ $('apply').onclick = async () => {
 $('copy').onclick = async () => {
   const p = state && state.port ? state.port : $('port').value;
   const url = 'http://127.0.0.1:' + p + '/mcp';
-  const prompt = 'Setup prompt for Cua: the mcp.json is `' + JSON.stringify({mcpServers:{cua:{url:url}}}) + '`, add it to the harness of my choice. Ask me a question on the specifics.';
+  const prompt = 'Setup prompt for dz: the mcp.json is `' + JSON.stringify({mcpServers:{dz:{url:url}}}) + '`, add it to the harness of my choice. Ask me a question on the specifics.';
   try { await navigator.clipboard.writeText(prompt); } catch (e) { return; }
   const b = $('copy'); b.textContent = 'Copied!'; setTimeout(() => b.textContent = 'Copy', 1200);
 };

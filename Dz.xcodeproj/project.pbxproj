@@ -7,11 +7,11 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		BEBFEABF30A95F6A0076E67D /* Cua.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Cua.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BEBFEABF30A95F6A0076E67D /* dz.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = dz.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		BEBFEAC130A95F6A0076E67D /* Cua */ = {
+		BEBFEAC130A95F6A0076E67D /* Dz */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Dz;
 			sourceTree = "<group>";
@@ -32,7 +32,7 @@
 		BEBFEAB630A95F6A0076E67D = {
 			isa = PBXGroup;
 			children = (
-				BEBFEAC130A95F6A0076E67D /* Cua */,
+				BEBFEAC130A95F6A0076E67D /* Dz */,
 				BEBFEAC030A95F6A0076E67D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		BEBFEAC030A95F6A0076E67D /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				BEBFEABF30A95F6A0076E67D /* Cua.app */,
+				BEBFEABF30A95F6A0076E67D /* dz.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		BEBFEABE30A95F6A0076E67D /* Cua */ = {
+		BEBFEABE30A95F6A0076E67D /* Dz */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = BEBFEACA30A95F6A0076E67D /* Build configuration list for PBXNativeTarget "Cua" */;
+			buildConfigurationList = BEBFEACA30A95F6A0076E67D /* Build configuration list for PBXNativeTarget "Dz" */;
 			buildPhases = (
 				BEBFEABB30A95F6A0076E67D /* Sources */,
 				BEBFEABC30A95F6A0076E67D /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				BEBFEAC130A95F6A0076E67D /* Cua */,
+				BEBFEAC130A95F6A0076E67D /* Dz */,
 			);
-			name = Cua;
+			name = Dz;
 			packageProductDependencies = (
 			);
-			productName = Cua;
-			productReference = BEBFEABF30A95F6A0076E67D /* Cua.app */;
+			productName = Dz;
+			productReference = BEBFEABF30A95F6A0076E67D /* dz.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = BEBFEABA30A95F6A0076E67D /* Build configuration list for PBXProject "Cua" */;
+			buildConfigurationList = BEBFEABA30A95F6A0076E67D /* Build configuration list for PBXProject "Dz" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				BEBFEABE30A95F6A0076E67D /* Cua */,
+				BEBFEABE30A95F6A0076E67D /* Dz */,
 			);
 		};
 /* End PBXProject section */
@@ -266,8 +266,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.willuhd.Cua;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.willuhd.dz;
+				PRODUCT_NAME = dz;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -299,8 +299,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.willuhd.Cua;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.willuhd.dz;
+				PRODUCT_NAME = dz;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -314,7 +314,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		BEBFEABA30A95F6A0076E67D /* Build configuration list for PBXProject "Cua" */ = {
+		BEBFEABA30A95F6A0076E67D /* Build configuration list for PBXProject "Dz" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BEBFEAC830A95F6A0076E67D /* Debug */,
@@ -323,7 +323,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		BEBFEACA30A95F6A0076E67D /* Build configuration list for PBXNativeTarget "Cua" */ = {
+		BEBFEACA30A95F6A0076E67D /* Build configuration list for PBXNativeTarget "Dz" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BEBFEACB30A95F6A0076E67D /* Debug */,
