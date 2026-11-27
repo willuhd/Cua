@@ -21,8 +21,6 @@ final class SessionController: NSObject {
     private var host: HostSession?
     private var client: ClientSession?
     private var window: NSWindow?
-    private var share: WebDAVServer?
-    static let sharePort: UInt16 = 47_101
 
     /// Called when a session starts or stops so the menubar can update.
     var onChange: (() -> Void)?
@@ -124,26 +122,14 @@ final class SessionController: NSObject {
 
     // MARK: - file share
 
-    /// Starts or stops serving a folder to the other Mac. The folder is the
-    /// user's choice; nothing is shared until one is picked.
-    func updateShare() {
-        share?.stop()
-        share = nil
-        guard let folder = MCPServer.shareFolder, !folder.isEmpty else { onChange?(); return }
-        let requirePassword = UserDefaults.standard.object(forKey: "dz.share.auth") as? Bool ?? true
-        let url = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath)
-        let server = WebDAVServer(root: url, port: Self.sharePort,
-                                  token: requirePassword ? MCPServer.remoteToken : "")
-        if server.start() { share = server }
-        onChange?()
+    /// The folder this Mac offers to the other one's agents. Nothing is
+    /// shared until a folder is picked.
+    var shareStatus: [String: Any] {
+        ["folder": MCPServer.shareFolder ?? ""]
     }
 
-    var shareStatus: [String: Any] {
-        let folder = MCPServer.shareFolder ?? ""
-        let requirePassword = UserDefaults.standard.object(forKey: "dz.share.auth") as? Bool ?? true
-        return ["folder": folder, "port": Int(Self.sharePort), "active": share != nil,
-                "requiresPassword": requirePassword,
-                "address": MCPServer.sharedAddress() ?? ""]
+    func updateShare() {
+        onChange?()
     }
 
     // MARK: - Stop

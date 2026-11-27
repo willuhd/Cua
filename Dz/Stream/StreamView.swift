@@ -187,9 +187,32 @@ final class StreamView: NSView {
         var out = InputEvent(kind: kind)
         out.code = event.keyCode
         out.flags = cgFlags(event.modifierFlags)
-        if kind != .flagsChanged { out.characters = event.characters }
+        out.isRepeat = event.isARepeat
+        if kind != .flagsChanged {
+            out.characters = event.characters
+            out.charactersIgnoringModifiers = event.charactersIgnoringModifiers
+        }
         out.timestampMicros = DispatchTime.now().uptimeNanoseconds / 1000
         return out
+    }
+
+    /// NSEvent and CGEvent number their scroll phases differently, so they are
+    /// translated rather than passed through. Passing through works for began
+    /// and then quietly breaks momentum.
+    private func scrollPhase(_ phase: NSEvent.Phase) -> UInt8 {
+        if phase.contains(.began) { return 1 }
+        if phase.contains(.changed) { return 2 }
+        if phase.contains(.ended) { return 4 }
+        if phase.contains(.cancelled) { return 8 }
+        if phase.contains(.mayBegin) { return 128 }
+        return 0
+    }
+
+    private func momentumPhase(_ phase: NSEvent.Phase) -> UInt8 {
+        if phase.contains(.began) { return 1 }
+        if phase.contains(.changed) { return 2 }
+        if phase.contains(.ended) { return 3 }
+        return 0
     }
 
     private func mouseEvent(_ kind: InputEvent.Kind, _ event: NSEvent, button: UInt16 = 0) -> InputEvent {
@@ -224,6 +247,17 @@ final class StreamView: NSView {
         var out = mouseEvent(.scroll, event)
         out.dx = Double(event.scrollingDeltaX)
         out.dy = Double(event.scrollingDeltaY)
+        out.continuous = event.hasPreciseScrollingDeltas
+        out.phase = scrollPhase(event.phase)
+        out.momentumPhase = momentumPhase(event.momentumPhase)
+        onInput?(out)
+    }
+
+    override func magnify(with event: NSEvent) {
+        var out = InputEvent(kind: .magnify)
+        out.magnification = Double(event.magnification)
+        out.flags = cgFlags(event.modifierFlags)
+        out.timestampMicros = DispatchTime.now().uptimeNanoseconds / 1000
         onInput?(out)
     }
 

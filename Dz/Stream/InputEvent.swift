@@ -20,6 +20,8 @@ struct InputEvent: Codable, Equatable {
         case keyDown, keyUp, flagsChanged
         case mouseMove, mouseDown, mouseUp, mouseDrag
         case scroll
+        /// A pinch or rotate on the trackpad.
+        case magnify
         /// A trackpad swipe. dx and dy carry the direction at unit scale.
         case gesture
     }
@@ -36,6 +38,20 @@ struct InputEvent: Codable, Equatable {
     var y: Double = 0
     var dx: Double = 0
     var dy: Double = 0
+    /// Scroll phase and momentum, so the host can post a real trackpad scroll
+    /// rather than a mouse wheel. Without these, momentum scrolling and
+    /// rubber-banding do not happen at all.
+    var phase: UInt8 = 0
+    var momentumPhase: UInt8 = 0
+    /// True for scrolls that came from a trackpad, which is what makes macOS
+    /// treat them as pixel-precise and accelerated.
+    var continuous: Bool = false
+    /// Pinch amount for a magnification gesture.
+    var magnification: Double = 0
+    /// Held-down repeats, so the host can repeat at its own rate.
+    var isRepeat: Bool = false
+    /// The key without modifiers applied, needed to resolve shortcuts.
+    var charactersIgnoringModifiers: String?
     /// Monotonic send time, for latency measurement.
     var timestampMicros: UInt64 = 0
 

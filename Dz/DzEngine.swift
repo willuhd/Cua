@@ -1041,46 +1041,68 @@ final class DzEngine {
         return toolResultText(jsonText(payload), structured: payload)
     }
 
+    /// A shell session on this Mac. Open one, write to it, read what came
+    /// back, close it. State persists between calls, which is the difference
+    /// between this and running a command.
     func toolTerminal(params: [String: Any]) -> [String: Any] {
-        guard let command = pString(params, "command"), !command.isEmpty else {
-            return errorResult("BAD_ARGS", "pass command")
-        }
-        let timeout = clampDouble(pDouble(params, "timeoutSeconds"), 1, 600, 30)
-        let cwd = pString(params, "cwd")
-        let result = Shell.run(command, timeout: timeout, cwd: cwd)
-        var payload: [String: Any] = ["exitCode": Int(result.exitCode),
-                                       "stdout": result.stdout,
-                                       "stderr": result.stderr]
-        if result.timedOut { payload["timedOut"] = true }
-        if result.truncated { payload["truncated"] = true }
-        return toolResultText(jsonText(payload), isError: result.exitCode != 0, structured: payload)
-    }
+        let op = (pString(params, "op") ?? "read").lowercased()
 
-    /// Mounts the other Mac's shared folder. Runs mount_webdav, which is the
-    /// part of macOS that makes this a real volume rather than a file browser.
-    func toolMount(params: [String: Any]) -> [String: Any] {
-        guard let host = pString(params, "host"), !host.isEmpty else {
-            return errorResult("BAD_ARGS", "pass host")
+        func session() -> TerminalSession? {
+            if let id = pString(params, "session"), let found = TerminalStore.shared.session(id) { return found }
+            return TerminalStore.shared.anySession()
         }
-        let port = clampInt(pInt(params, "port"), 1, 65535, 47101)
-        let name = (pString(params, "name") ?? "dz").replacingOccurrences(of: "/", with: "-")
-        let mountpoint = pString(params, "path") ?? "/Volumes/" + name
-        let token = MCPServer.remoteToken
 
-        // mount_webdav wants the URL with credentials when the server asks for
-        // them, and this one always does.
-        let url = "http://dz:" + token + "@" + host + ":" + String(port) + "/"
-        let result = Shell.run("/bin/mkdir -p " + mountpoint + " 2>&1; /sbin/mount_webdav -S -v "
-                               + url + " " + mountpoint + " 2>&1")
-        var payload: [String: Any] = ["ok": result.exitCode == 0,
-                                       "mountpoint": mountpoint,
-                                       "output": result.stdout + result.stderr]
-        if !result.stdout.isEmpty { payload["stdout"] = result.stdout }
-        if !result.stderr.isEmpty { payload["stderr"] = result.stderr }
-        if result.exitCode != 0 {
-            payload["hint"] = "Mounting under /Volumes needs an existing mount point; if this is a permission failure choose a path you own, such as ~/Volumes/" + name
+        switch op {
+        case "open":
+            let columns = clampInt(pInt(params, "columns"), 20, 400, 100)
+            let rows = clampInt(pInt(params, "rows"), 2, 200, 30)
+            guard let opened = TerminalStore.shared.open(cwd: pString(params, "cwd"),
+                                                         columns: columns, rows: rows) else {
+                return errorResult("TERMINAL_FAILED", "could not start a shell")
+            }
+            let payload: [String: Any] = ["ok": true, "session": opened.id,
+                                          "columns": columns, "rows": rows]
+            return toolResultText(jsonText(payload), structured: payload)
+
+        case "write":
+            guard let target = session() else {
+                return errorResult("NO_TERMINAL", "no terminal is open; call terminal with op open first")
+            }
+            guard let input = params["input"] as? String else {
+                return errorResult("BAD_ARGS", "pass input")
+            }
+            target.write(input)
+            return toolResultText(jsonText(["ok": true, "session": target.id, "bytes": input.utf8.count]))
+
+        case "read":
+            guard let target = session() else {
+                return errorResult("NO_TERMINAL", "no terminal is open; call terminal with op open first")
+            }
+            let cursor = clampInt(pInt(params, "cursor"), 0, Int.max, 0)
+            let result = target.readSince(cursor)
+            let payload: [String: Any] = ["session": target.id, "text": result.text,
+                                          "cursor": result.cursor, "alive": target.isRunning]
+            return toolResultText(jsonText(payload), structured: payload)
+
+        case "resize":
+            guard let target = session() else {
+                return errorResult("NO_TERMINAL", "no terminal is open")
+            }
+            target.resize(columns: clampInt(pInt(params, "columns"), 20, 400, 100),
+                          rows: clampInt(pInt(params, "rows"), 2, 200, 30))
+            return toolResultText(jsonText(["ok": true, "session": target.id]))
+
+        case "close":
+            if let id = pString(params, "session") {
+                TerminalStore.shared.close(id)
+            } else {
+                TerminalStore.shared.closeAll()
+            }
+            return toolResultText(jsonText(["ok": true]))
+
+        default:
+            return errorResult("BAD_ARGS", "op must be open, write, read, resize or close")
         }
-        return toolResultText(jsonText(payload), isError: result.exitCode != 0, structured: payload)
     }
 
     /// File access on the shared folder. Read and write are in the same tool
@@ -1153,7 +1175,6 @@ final class DzEngine {
         case "request_foreground": return toolRequestForeground(params: params)
         case "foreground_status": return toolForegroundStatus(params: params)
         case "terminal": return toolTerminal(params: params)
-        case "mount": return toolMount(params: params)
         case "files": return toolFiles(params: params)
         default: return errorResult("NO_SUCH_TOOL", "tool \(tool) does not exist")
         }

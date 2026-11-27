@@ -47,26 +47,13 @@ final class InputInjector {
             }
             post(type: type, at: point(event.x, event.y), button: button, event: event)
         case .scroll:
-            guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
-                                   wheel1: Int32(event.dy), wheel2: Int32(event.dx), wheel3: 0) else { return }
-            cg.location = point(event.x, event.y)
-            cg.flags = CGEventFlags(rawValue: event.flags)
-            tag(cg)
-            cg.post(tap: .cghidEventTap)
+            injectScroll(event)
+        case .magnify:
+            injectMagnify(event)
         case .gesture:
             injectGesture(event)
         case .keyDown, .keyUp, .flagsChanged:
-            // The character path wins when the client sent one: it already
-            // reflects the layout and any input method the user is running.
-            if let text = event.characters, !text.isEmpty, event.kind != .flagsChanged {
-                postUnicode(text, keyDown: event.kind == .keyDown, flags: event.flags)
-                return
-            }
-            guard let cg = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(event.code),
-                                   keyDown: event.kind != .keyUp) else { return }
-            cg.flags = CGEventFlags(rawValue: event.flags)
-            tag(cg)
-            cg.post(tap: .cghidEventTap)
+            injectKey(event)
         }
     }
 
@@ -106,6 +93,66 @@ final class InputInjector {
         }
     }
 
+    /// Text goes by character and everything else by keycode.
+    ///
+    /// The character path is what makes the layout and any input method on the
+    /// client behave correctly. It is also exactly wrong for a shortcut: a
+    /// command key chord needs the physical key, so anything with a command,
+    /// control or option modifier is posted by keycode instead. Getting this
+    /// backwards types the letter instead of firing the menu item.
+    private func injectKey(_ event: InputEvent) {
+        let flags = CGEventFlags(rawValue: event.flags)
+        let shortcut = flags.contains(.maskCommand) || flags.contains(.maskControl)
+            || flags.contains(.maskAlternate)
+        let hasText = !(event.characters ?? "").isEmpty
+        if hasText, !shortcut, event.kind != .flagsChanged {
+            postUnicode(event.characters!, keyDown: event.kind == .keyDown, event: event)
+            return
+        }
+        guard let cg = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(event.code),
+                               keyDown: event.kind != .keyUp) else { return }
+        cg.flags = flags
+        if event.isRepeat { cg.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
+        tag(cg)
+        cg.post(tap: .cghidEventTap)
+    }
+
+    /// A trackpad scroll carries a phase and, after the fingers lift, a
+    /// momentum phase that the system continues on its own. Posting without
+    /// them gives the host a mouse wheel: no momentum, no rubber banding.
+    private func injectScroll(_ event: InputEvent) {
+        guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                               wheel1: Int32(event.dy), wheel2: Int32(event.dx), wheel3: 0) else { return }
+        cg.location = point(event.x, event.y)
+        cg.flags = CGEventFlags(rawValue: event.flags)
+        if event.continuous {
+            cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        }
+        if event.phase != 0 {
+            cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(event.phase))
+        }
+        if event.momentumPhase != 0 {
+            cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: Int64(event.momentumPhase))
+        }
+        tag(cg)
+        cg.post(tap: .cghidEventTap)
+    }
+
+    /// A pinch becomes the zoom shortcut, because a magnification gesture
+    /// cannot be synthesised and this is what it means almost everywhere.
+    private func injectMagnify(_ event: InputEvent) {
+        guard event.magnification != 0 else { return }
+        let increase = event.magnification > 0
+        let code: CGKeyCode = increase ? 24 : 27  // "=" and "-"
+        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
+              let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { return }
+        for posted in [down, up] {
+            posted.flags = [.maskCommand]
+            tag(posted)
+            posted.post(tap: .cghidEventTap)
+        }
+    }
+
     private func post(type: CGEventType, at location: CGPoint, button: CGMouseButton, event: InputEvent) {
         guard let cg = CGEvent(mouseEventSource: nil, mouseType: type,
                                mouseCursorPosition: location, mouseButton: button) else { return }
@@ -118,9 +165,10 @@ final class InputInjector {
         cg.post(tap: .cghidEventTap)
     }
 
-    private func postUnicode(_ text: String, keyDown: Bool, flags: UInt64) {
+    private func postUnicode(_ text: String, keyDown: Bool, event: InputEvent) {
         guard let cg = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: keyDown) else { return }
-        cg.flags = CGEventFlags(rawValue: flags)
+        cg.flags = CGEventFlags(rawValue: event.flags)
+        if event.isRepeat { cg.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
         let units = Array(text.utf16)
         units.withUnsafeBufferPointer { buffer in
             guard let base = buffer.baseAddress else { return }

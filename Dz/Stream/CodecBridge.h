@@ -11,6 +11,9 @@
 
 #pragma once
 
+// forkpty lives here; Swift cannot reach it without a C surface.
+#include <util.h>
+
 #include <dav1d/data.h>
 #include <dav1d/dav1d.h>
 #include <EbSvtAv1.h>
