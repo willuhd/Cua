@@ -165,7 +165,13 @@ final class ControlChannel {
             let n = recv(current, &chunk, chunk.count, 0)
             if n > 0 {
                 buffer.append(contentsOf: chunk[0..<n])
-                for message in ControlFraming.drain(&buffer) { onMessage?(message) }
+                var corrupted = false
+                let messages = ControlFraming.drain(&buffer, corrupted: &corrupted)
+                for message in messages { onMessage?(message) }
+                if corrupted {
+                    NSLog("dz: control stream is corrupt; closing the channel")
+                    break
+                }
                 continue
             }
             if n < 0 && errno == EINTR { continue }

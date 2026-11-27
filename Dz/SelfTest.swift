@@ -62,7 +62,8 @@ enum SelfTest {
                     let parts = VideoFragmenter.fragments(for: packet, frameIndex: index,
                                                           timestampMicros: UInt64(index) * 16666,
                                                           keyframe: index % 60 == 0,
-                                                          mtu: VideoPacket.defaultMTU)
+                                                          mtu: VideoPacket.defaultMTU,
+                                                          parityOverhead: settings.fecOverhead)
                     sender.send(parts)
                     packets += 1
                     fragments += parts.count
@@ -72,7 +73,8 @@ enum SelfTest {
             for packet in try encoder.finish() {
                 let parts = VideoFragmenter.fragments(for: packet, frameIndex: index,
                                                       timestampMicros: UInt64(index) * 16666,
-                                                      keyframe: false, mtu: VideoPacket.defaultMTU)
+                                                      keyframe: false, mtu: VideoPacket.defaultMTU,
+                                                      parityOverhead: settings.fecOverhead)
                 sender.send(parts)
                 packets += 1
                 fragments += parts.count
@@ -80,22 +82,39 @@ enum SelfTest {
             }
             say("encoded \(packets) packets into \(fragments) fragments")
 
+            // Throw away the first data fragment of every third frame, so the
+            // parity path is exercised rather than merely present.
             var framesOut = 0
             var received = 0
+            var discarded = 0
+            var deadline = Date().addingTimeInterval(5)
             while framesOut < packets {
-                guard let packet = receiver.receive(timeout: 1.0) else { break }
+                guard let packet = receiver.receive(timeout: 0.2) else {
+                    assembler.expireStale()
+                    if Date() > deadline { break }
+                    continue
+                }
                 received += 1
+                if !packet.isParity, packet.fragmentIndex == 0, packet.frameIndex % 3 == 0 {
+                    discarded += 1
+                    continue
+                }
                 guard let whole = assembler.ingest(packet) else { continue }
-                if try decoder.decode(whole) != nil { framesOut += 1 }
+                if try decoder.decode(whole) != nil {
+                    framesOut += 1
+                    deadline = Date().addingTimeInterval(5)
+                }
             }
-            say("received \(received) fragments, decoded \(framesOut) of \(packets) frames")
+            say("received " + String(received) + " fragments, discarded " + String(discarded)
+                + ", recovered " + String(assembler.recovered))
+            say("decoded " + String(framesOut) + " of " + String(packets) + " frames")
 
-            guard received == fragments else {
-                say("FAIL: fragments lost on loopback")
+            guard assembler.recovered > 0 else {
+                say("FAIL: nothing was recovered from parity, so the loss was not exercised")
                 return 1
             }
             guard framesOut == packets else {
-                say("FAIL: \(packets - framesOut) frames did not decode")
+                say("FAIL: some frames did not decode")
                 return 1
             }
             say("PASS")

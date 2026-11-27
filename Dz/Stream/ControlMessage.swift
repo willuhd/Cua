@@ -70,12 +70,22 @@ enum ControlFraming {
         return out
     }
 
-    static func drain(_ buffer: inout Data) -> [ControlMessage] {
+    /// Pulls complete messages out of the buffer.
+    ///
+    /// A length that cannot be right means the stream is no longer the stream we
+    /// are reading, so it is reported rather than skipped: walking on and
+    /// hoping would take an unbounded amount of memory and never recover.
+    static func drain(_ buffer: inout Data, corrupted: inout Bool) -> [ControlMessage] {
         var messages: [ControlMessage] = []
         while buffer.count >= 4 {
-            let b = [UInt8](buffer.prefix(4))
-            let length = Int(UInt32(b[0]) << 24 | UInt32(b[1]) << 16 | UInt32(b[2]) << 8 | UInt32(b[3]))
-            guard length > 0, length < 1_000_000, buffer.count >= 4 + length else { break }
+            let head = [UInt8](buffer.prefix(4))
+            let length = Int(UInt32(head[0]) << 24 | UInt32(head[1]) << 16 | UInt32(head[2]) << 8 | UInt32(head[3]))
+            guard length > 0, length < 1_000_000 else {
+                corrupted = true
+                buffer.removeAll()
+                return messages
+            }
+            guard buffer.count >= 4 + length else { break }
             let body = buffer.subdata(in: 4..<(4 + length))
             buffer.removeFirst(4 + length)
             if let message = try? JSONDecoder().decode(ControlMessage.self, from: body) {

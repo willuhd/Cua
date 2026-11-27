@@ -144,7 +144,8 @@ final class HostSession {
                                                                          frameIndex: frameIndex,
                                                                          timestampMicros: stamp,
                                                                          keyframe: keyframe,
-                                                                         mtu: VideoPacket.defaultMTU)
+                                                                         mtu: VideoPacket.defaultMTU,
+                                                                         parityOverhead: settings.fecOverhead)
                 sender?.send(fragments)
                 let sentBytes = fragments.reduce(0) { $0 + $1.payload.count + VideoPacket.headerSize }
                 stateLock.lock()

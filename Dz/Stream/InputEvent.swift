@@ -48,35 +48,3 @@ enum PointerCapture {
     /// Cursor is visible and the host is told where it is: for normal desktop use.
     case free
 }
-
-/// Wraps input events for the wire: a length-prefixed stream, because input has
-/// to arrive in order and must not be silently dropped the way video can be.
-enum InputFraming {
-    static func encode(_ event: InputEvent) -> Data? {
-        guard let body = try? JSONEncoder().encode(event) else { return nil }
-        var out = Data(capacity: 4 + body.count)
-        let length = UInt32(body.count)
-        out.append(UInt8(truncatingIfNeeded: length >> 24))
-        out.append(UInt8(truncatingIfNeeded: length >> 16))
-        out.append(UInt8(truncatingIfNeeded: length >> 8))
-        out.append(UInt8(truncatingIfNeeded: length))
-        out.append(body)
-        return out
-    }
-
-    /// Pulls complete messages out of a receive buffer, leaving any partial tail.
-    static func drain(_ buffer: inout Data) -> [InputEvent] {
-        var events: [InputEvent] = []
-        while buffer.count >= 4 {
-            let b = [UInt8](buffer.prefix(4))
-            let length = Int(UInt32(b[0]) << 24 | UInt32(b[1]) << 16 | UInt32(b[2]) << 8 | UInt32(b[3]))
-            guard length > 0, length < 1_000_000, buffer.count >= 4 + length else { break }
-            let body = buffer.subdata(in: 4..<(4 + length))
-            buffer.removeFirst(4 + length)
-            if let event = try? JSONDecoder().decode(InputEvent.self, from: body) {
-                events.append(event)
-            }
-        }
-        return events
-    }
-}
