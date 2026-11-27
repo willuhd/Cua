@@ -53,6 +53,8 @@ final class InputInjector {
             cg.flags = CGEventFlags(rawValue: event.flags)
             tag(cg)
             cg.post(tap: .cghidEventTap)
+        case .gesture:
+            injectGesture(event)
         case .keyDown, .keyUp, .flagsChanged:
             // The character path wins when the client sent one: it already
             // reflects the layout and any input method the user is running.
@@ -80,6 +82,28 @@ final class InputInjector {
         next.x = min(max(next.x, screenBounds.minX), screenBounds.maxX - 1)
         next.y = min(max(next.y, screenBounds.minY), screenBounds.maxY - 1)
         return next
+    }
+
+    /// A three finger swipe means a shortcut on macOS. There is no API to post
+    /// the gesture itself, so the shortcut that produces the same result is
+    /// posted instead. Which shortcut is the user's System Settings, so these
+    /// are the defaults rather than the truth.
+    private func injectGesture(_ event: InputEvent) {
+        // HIG keycodes: left 123, right 124, down 125, up 126.
+        var code: CGKeyCode?
+        if abs(event.dx) >= abs(event.dy) {
+            if event.dx < 0 { code = 124 } else if event.dx > 0 { code = 123 }
+        } else {
+            if event.dy > 0 { code = 126 } else if event.dy < 0 { code = 125 }
+        }
+        guard let code else { return }
+        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
+              let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { return }
+        for posted in [down, up] {
+            posted.flags = [.maskControl]
+            tag(posted)
+            posted.post(tap: .cghidEventTap)
+        }
     }
 
     private func post(type: CGEventType, at location: CGPoint, button: CGMouseButton, event: InputEvent) {

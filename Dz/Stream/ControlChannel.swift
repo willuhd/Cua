@@ -131,6 +131,8 @@ final class ControlChannel {
     func send(_ event: InputEvent) -> Bool { enqueue(.input(event)) }
     @discardableResult
     func send(stats: SessionStats) -> Bool { enqueue(.stats(stats)) }
+    @discardableResult
+    func send(clipboard: ClipboardPayload) -> Bool { enqueue(.clipboard(clipboard)) }
 
     private func enqueue(_ message: ControlMessage) -> Bool {
         guard let framed = ControlFraming.encode(message) else { return false }

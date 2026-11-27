@@ -1041,6 +1041,98 @@ final class DzEngine {
         return toolResultText(jsonText(payload), structured: payload)
     }
 
+    func toolTerminal(params: [String: Any]) -> [String: Any] {
+        guard let command = pString(params, "command"), !command.isEmpty else {
+            return errorResult("BAD_ARGS", "pass command")
+        }
+        let timeout = clampDouble(pDouble(params, "timeoutSeconds"), 1, 600, 30)
+        let cwd = pString(params, "cwd")
+        let result = Shell.run(command, timeout: timeout, cwd: cwd)
+        var payload: [String: Any] = ["exitCode": Int(result.exitCode),
+                                       "stdout": result.stdout,
+                                       "stderr": result.stderr]
+        if result.timedOut { payload["timedOut"] = true }
+        if result.truncated { payload["truncated"] = true }
+        return toolResultText(jsonText(payload), isError: result.exitCode != 0, structured: payload)
+    }
+
+    /// Mounts the other Mac's shared folder. Runs mount_webdav, which is the
+    /// part of macOS that makes this a real volume rather than a file browser.
+    func toolMount(params: [String: Any]) -> [String: Any] {
+        guard let host = pString(params, "host"), !host.isEmpty else {
+            return errorResult("BAD_ARGS", "pass host")
+        }
+        let port = clampInt(pInt(params, "port"), 1, 65535, 47101)
+        let name = (pString(params, "name") ?? "dz").replacingOccurrences(of: "/", with: "-")
+        let mountpoint = pString(params, "path") ?? "/Volumes/" + name
+        let token = MCPServer.remoteToken
+
+        // mount_webdav wants the URL with credentials when the server asks for
+        // them, and this one always does.
+        let url = "http://dz:" + token + "@" + host + ":" + String(port) + "/"
+        let result = Shell.run("/bin/mkdir -p " + mountpoint + " 2>&1; /sbin/mount_webdav -S -v "
+                               + url + " " + mountpoint + " 2>&1")
+        var payload: [String: Any] = ["ok": result.exitCode == 0,
+                                       "mountpoint": mountpoint,
+                                       "output": result.stdout + result.stderr]
+        if !result.stdout.isEmpty { payload["stdout"] = result.stdout }
+        if !result.stderr.isEmpty { payload["stderr"] = result.stderr }
+        if result.exitCode != 0 {
+            payload["hint"] = "Mounting under /Volumes needs an existing mount point; if this is a permission failure choose a path you own, such as ~/Volumes/" + name
+        }
+        return toolResultText(jsonText(payload), isError: result.exitCode != 0, structured: payload)
+    }
+
+    /// File access on the shared folder. Read and write are in the same tool
+    /// because they are the same resource with one access rule between them.
+    func toolFiles(params: [String: Any]) -> [String: Any] {
+        let op = (pString(params, "op") ?? "list").lowercased()
+        let path = pString(params, "path") ?? "/"
+        do {
+            switch op {
+            case "list":
+                let entries = try Files.list(path)
+                let items: [[String: Any]] = entries.map {
+                    ["path": $0.path, "directory": $0.directory, "bytes": $0.bytes,
+                     "modified": Int($0.modified.timeIntervalSince1970)]
+                }
+                let payload: [String: Any] = ["root": Files.root.map(Files.display) ?? "", "entries": items]
+                return toolResultText(jsonText(payload), structured: payload)
+            case "read":
+                let data = try Files.read(path)
+                if let text = String(data: data, encoding: .utf8) {
+                    let payload: [String: Any] = ["path": path, "bytes": data.count, "text": text]
+                    return toolResultText(jsonText(payload), structured: payload)
+                }
+                let payload: [String: Any] = ["path": path, "bytes": data.count,
+                                               "base64": data.base64EncodedString()]
+                return toolResultText(jsonText(payload), structured: payload)
+            case "write":
+                guard let content = params["text"] as? String else {
+                    return errorResult("BAD_ARGS", "pass text")
+                }
+                try Files.write(path, data: Data(content.utf8))
+                return toolResultText(jsonText(["ok": true, "path": path, "bytes": content.utf8.count]))
+            case "mkdir":
+                try Files.makeDirectory(path)
+                return toolResultText(jsonText(["ok": true, "path": path]))
+            case "delete":
+                try Files.remove(path)
+                return toolResultText(jsonText(["ok": true, "path": path]))
+            case "stat":
+                let entry = try Files.stat(path)
+                let payload: [String: Any] = ["path": entry.path, "directory": entry.directory,
+                                               "bytes": entry.bytes,
+                                               "modified": Int(entry.modified.timeIntervalSince1970)]
+                return toolResultText(jsonText(payload), structured: payload)
+            default:
+                return errorResult("BAD_ARGS", "op must be list, read, write, mkdir, delete or stat")
+            }
+        } catch {
+            return errorResult("FILE_ERROR", String(describing: error))
+        }
+    }
+
     func dispatch(tool: String, params: [String: Any]) -> [String: Any] {
         switch tool {
         case "list_apps": return toolListApps()
@@ -1060,6 +1152,9 @@ final class DzEngine {
         case "press": return toolPress(params: params)
         case "request_foreground": return toolRequestForeground(params: params)
         case "foreground_status": return toolForegroundStatus(params: params)
+        case "terminal": return toolTerminal(params: params)
+        case "mount": return toolMount(params: params)
+        case "files": return toolFiles(params: params)
         default: return errorResult("NO_SUCH_TOOL", "tool \(tool) does not exist")
         }
     }

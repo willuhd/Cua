@@ -33,6 +33,7 @@ final class HostSession {
     private let injector: InputInjector
 
     private var control: ControlChannel?
+    private let clipboard = ClipboardSync()
     private let encodeQueue = DispatchQueue(label: "dz.encode", qos: .userInteractive)
     private let controlQueue = DispatchQueue(label: "dz.control.accept", qos: .userInteractive)
     private var frameIndex: UInt32 = 0
@@ -72,10 +73,21 @@ final class HostSession {
         let channel = try ControlChannel.listen(port: controlPort)
         control = channel
         channel.onMessage = { [weak self] message in
-            guard let self, case .input(let event) = message else { return }
-            self.injector.inject(event)
-            self.onInput?(event)
+            guard let self else { return }
+            switch message {
+            case .input(let event):
+                self.injector.inject(event)
+                self.onInput?(event)
+            case .clipboard(let payload):
+                self.clipboard.apply(payload)
+            case .stats:
+                break
+            }
         }
+        clipboard.onCopy = { [weak self] payload in
+            _ = self?.control?.send(clipboard: payload)
+        }
+        clipboard.start()
         channel.onConnected = { [weak self] peer in
             guard let self else { return }
             do {
@@ -161,6 +173,7 @@ final class HostSession {
     }
 
     func stop() {
+        clipboard.stop()
         statsTimer?.cancel()
         statsTimer = nil
         source.stop()
@@ -179,6 +192,7 @@ final class ClientSession {
     private let control: ControlChannel
     private let receiveQueue = DispatchQueue(label: "dz.receive", qos: .userInteractive)
     private let display = try? DisplayConverter()
+    private let clipboard = ClipboardSync()
 
     let view: StreamView
     private var running = false
@@ -209,9 +223,17 @@ final class ClientSession {
             _ = control?.send(event)
         }
         control.onMessage = { [weak self] message in
-            guard case .stats(let stats) = message else { return }
-            self?.hostStats = stats
+            guard let self else { return }
+            switch message {
+            case .stats(let stats): self.hostStats = stats
+            case .clipboard(let payload): self.clipboard.apply(payload)
+            case .input: break
+            }
         }
+        clipboard.onCopy = { [weak control] payload in
+            _ = control?.send(clipboard: payload)
+        }
+        clipboard.start()
     }
 
     func start() {
@@ -246,6 +268,7 @@ final class ClientSession {
     }
 
     func stop() {
+        clipboard.stop()
         stateLock.lock(); running = false; stateLock.unlock()
         control.close()
     }

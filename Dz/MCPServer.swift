@@ -66,6 +66,9 @@ func toolDefs() -> [[String: Any]] {
         ["name": "ax", "description": "Read the app's accessibility tree to find exact controls, labels and buttons, with positions, without a screenshot.", "inputSchema": obj(["acquisitionId": idProp, "wid": widProp, "depth": ["type": "number"], "maxNodes": ["type": "number"]], required: ["acquisitionId"])],
         ["name": "press", "description": "Activate a control found with ax, by its index. Safer than clicking a guess; guard it with expectRole/expectTitle so a stale tree cannot press the wrong thing.", "inputSchema": obj(["acquisitionId": idProp, "wid": widProp, "index": ["type": "number"], "depth": ["type": "number"], "maxNodes": ["type": "number"], "expectRole": ["type": "string"], "expectTitle": ["type": "string"]], required: ["acquisitionId", "index"])],
         ["name": "request_foreground", "description": "Ask the user for the real pointer and keyboard, when the job truly needs the whole screen. Waits for them to approve in the menubar; on approval every background lease is dropped. Do not call this for work you can do in the background.", "inputSchema": obj(["reason": ["type": "string"], "coordSpace": coordProp, "agent": ["type": "string"]], required: [])],
+        ["name": "terminal", "description": "Run a command on this Mac and return its output. Use it for anything that is easier to do in a shell than through the UI. Blocks up to the timeout; pass a longer one for slow work.", "inputSchema": obj(["command": ["type": "string", "description": "The command line, run through zsh -lc"], "cwd": ["type": "string", "description": "Working directory, if it matters"], "timeoutSeconds": ["type": "number", "description": "Wall clock limit, default 30, max 600"]], required: ["command"])],
+        ["name": "files", "description": "Work with files in the folder this Mac shares: list, read, write, mkdir, delete, stat. Paths are relative to the shared folder and cannot leave it.", "inputSchema": obj(["op": ["type": "string", "enum": ["list", "read", "write", "mkdir", "delete", "stat"], "description": "What to do"], "path": ["type": "string", "description": "Path relative to the shared folder"], "text": ["type": "string", "description": "Contents, for write"]], required: ["op", "path"])],
+        ["name": "mount", "description": "Mount the other Mac's shared folder as a volume, so its files appear in the Finder like a disk. Returns where it mounted.", "inputSchema": obj(["host": ["type": "string", "description": "Address of the other Mac"], "port": ["type": "number", "description": "Its share port, default 47101"], "name": ["type": "string", "description": "Volume name, default dz"], "path": ["type": "string", "description": "Where to mount, default /Volumes/<name>"]], required: ["host"])],
         ["name": "foreground_status", "description": "Whether the user has given you (or anyone) full control, or a request is still waiting.", "inputSchema": obj([:], required: [])],
     ]
 }
@@ -131,6 +134,12 @@ final class MCPServer: NSObject {
         return result
     }
 
+    /// The folder this Mac offers to the other one, if the user turned it on.
+    static var shareFolder: String? {
+        get { UserDefaults.standard.string(forKey: "dz.share.folder") }
+        set { UserDefaults.standard.set(newValue, forKey: "dz.share.folder") }
+    }
+
     static var remoteToken: String = {
         let key = "dz.mcp.token"
         if let existing = UserDefaults.standard.string(forKey: key) { return existing }
@@ -176,7 +185,7 @@ final class MCPServer: NSObject {
     private let leaseQueueLock = NSLock()
     private var leaseQueues: [String: DispatchQueue] = [:]
     private let controlTools: Set<String> = ["list_apps", "windows", "acquire", "release",
-                                             "foreground_status"]
+                                             "foreground_status", "terminal", "mount", "files"]
     private let inputTools: Set<String> = ["click", "type", "key", "scroll", "drag", "hover"]
     let connGate = DispatchSemaphore(value: 8)
     var onStateChange: (() -> Void)?
@@ -540,6 +549,7 @@ final class MCPServer: NSObject {
                                           "appIcon": iconBase64Cached(pid: getpid()),
                                           "appPath": Bundle.main.bundleURL.path,
                                           "foreground": ForegroundCoordinator.shared.status(),
+                                          "share": SessionController.shared.shareStatus,
                                           "remote": ["expose": MCPServer.expose,
                                                      "token": MCPServer.remoteToken,
                                                      "address": MCPServer.sharedAddress() ?? ""]]
@@ -623,6 +633,23 @@ final class MCPServer: NSObject {
             }
             let payload: [String: Any] = ["ok": true, "requested": action]
             send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
+            return
+        }
+        if pathOnly == "/api/share" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
+            let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+            let folder = (obj["folder"] as? String) ?? ""
+            MCPServer.shareFolder = folder.isEmpty ? nil : folder
+            if let auth = obj["auth"] as? Bool {
+                UserDefaults.standard.set(auth, forKey: "dz.share.auth")
+            }
+            // Starting or stopping the share touches an app object, so the
+            // answer is sent from the main thread once it has actually happened.
+            DispatchQueue.main.async { [weak self] in
+                SessionController.shared.updateShare()
+                let payload: [String: Any] = ["ok": true, "share": SessionController.shared.shareStatus]
+                self?.send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
+            }
             return
         }
         if pathOnly == "/api/remote" && req.method == "POST" {

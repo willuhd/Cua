@@ -31,15 +31,17 @@ struct SessionStats: Codable, Equatable {
 enum ControlMessage: Codable {
     case input(InputEvent)
     case stats(SessionStats)
+    case clipboard(ClipboardPayload)
 
-    private enum CodingKeys: String, CodingKey { case kind, input, stats }
-    private enum Kind: String, Codable { case input, stats }
+    private enum CodingKeys: String, CodingKey { case kind, input, stats, clipboard }
+    private enum Kind: String, Codable { case input, stats, clipboard }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
         case .input: self = .input(try container.decode(InputEvent.self, forKey: .input))
         case .stats: self = .stats(try container.decode(SessionStats.self, forKey: .stats))
+        case .clipboard: self = .clipboard(try container.decode(ClipboardPayload.self, forKey: .clipboard))
         }
     }
 
@@ -52,6 +54,9 @@ enum ControlMessage: Codable {
         case .stats(let stats):
             try container.encode(Kind.stats, forKey: .kind)
             try container.encode(stats, forKey: .stats)
+        case .clipboard(let payload):
+            try container.encode(Kind.clipboard, forKey: .kind)
+            try container.encode(payload, forKey: .clipboard)
         }
     }
 }

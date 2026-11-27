@@ -218,6 +218,7 @@ enum SelfTest {
                 switch message {
                 case .input(let event): receivedInput = event.code == 42 && event.kind == .keyDown
                 case .stats(let stats): receivedStats = stats.targetFps == 75
+                case .clipboard: break
                 }
             }
             DispatchQueue.global().async {

@@ -130,6 +130,29 @@ final class StreamView: NSView {
         applyPointerCapture()
     }
 
+    private var swipeMonitor: Any?
+
+    /// Trackpad swipes, forwarded as the effect rather than as the gesture:
+    /// a three finger swipe is a WindowServer gesture and there is no way to
+    /// inject one, so the host is asked to do what the swipe means.
+    private func installSwipeMonitor() {
+        guard swipeMonitor == nil else { return }
+        swipeMonitor = NSEvent.addLocalMonitorForEvents(matching: .swipe) { [weak self] event in
+            guard let self, self.window?.isKeyWindow == true else { return event }
+            var out = InputEvent(kind: .gesture)
+            out.dx = Double(event.deltaX.rounded())
+            out.dy = Double(event.deltaY.rounded())
+            out.timestampMicros = DispatchTime.now().uptimeNanoseconds / 1000
+            if out.dx != 0 || out.dy != 0 { self.onInput?(out) }
+            return event
+        }
+    }
+
+    private func removeSwipeMonitor() {
+        if let swipeMonitor { NSEvent.removeMonitor(swipeMonitor) }
+        swipeMonitor = nil
+    }
+
     private func applyPointerCapture() {
         switch pointerCapture {
         case .locked:

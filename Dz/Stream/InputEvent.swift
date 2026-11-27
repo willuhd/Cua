@@ -20,6 +20,8 @@ struct InputEvent: Codable, Equatable {
         case keyDown, keyUp, flagsChanged
         case mouseMove, mouseDown, mouseUp, mouseDrag
         case scroll
+        /// A trackpad swipe. dx and dy carry the direction at unit scale.
+        case gesture
     }
 
     var kind: Kind
@@ -38,7 +40,7 @@ struct InputEvent: Codable, Equatable {
     var timestampMicros: UInt64 = 0
 
     var isKey: Bool { kind == .keyDown || kind == .keyUp || kind == .flagsChanged }
-    var isMouse: Bool { !isKey && kind != .scroll }
+    var isMouse: Bool { !isKey && kind != .scroll && kind != .gesture }
 }
 
 /// How the client hands its pointer to the session.
