@@ -31,6 +31,11 @@ import Cocoa
 @main
 struct DzMain {
     static func main() {
+        // A headless check, so the pipeline can be proven without a window or
+        // a second machine.
+        if CommandLine.arguments.contains("--selftest") {
+            exit(SelfTest.run())
+        }
         let app = NSApplication.shared
         let d = AppDelegate()
         app.delegate = d
