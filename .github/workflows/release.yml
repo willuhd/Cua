@@ -20,8 +20,8 @@ permissions:
 
 env:
   APP_NAME: dz
-  PROJECT_FILE: Dz.xcodeproj
-  BUILD_TARGET: Dz
+  PROJECT_FILE: dz.xcodeproj
+  BUILD_TARGET: dz
   ARCHS: "arm64 x86_64"
 
 jobs:

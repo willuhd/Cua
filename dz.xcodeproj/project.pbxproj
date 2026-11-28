@@ -33,9 +33,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		BEBFEAC130A95F6A0076E67D /* Dz */ = {
+		BEBFEAC130A95F6A0076E67D /* dz */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Dz;
+			path = dz;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -54,7 +54,7 @@
 		BEBFEAB630A95F6A0076E67D = {
 			isa = PBXGroup;
 			children = (
-				BEBFEAC130A95F6A0076E67D /* Dz */,
+				BEBFEAC130A95F6A0076E67D /* dz */,
 				BEBFEAC030A95F6A0076E67D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -70,9 +70,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		BEBFEABE30A95F6A0076E67D /* Dz */ = {
+		BEBFEABE30A95F6A0076E67D /* dz */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = BEBFEACA30A95F6A0076E67D /* Build configuration list for PBXNativeTarget "Dz" */;
+			buildConfigurationList = BEBFEACA30A95F6A0076E67D /* Build configuration list for PBXNativeTarget "dz" */;
 			buildPhases = (
 				BEBFEABB30A95F6A0076E67D /* Sources */,
 				BEBFEABC30A95F6A0076E67D /* Frameworks */,
@@ -84,12 +84,12 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				BEBFEAC130A95F6A0076E67D /* Dz */,
+				BEBFEAC130A95F6A0076E67D /* dz */,
 			);
-			name = Dz;
+			name = dz;
 			packageProductDependencies = (
 			);
-			productName = Dz;
+			productName = dz;
 			productReference = BEBFEABF30A95F6A0076E67D /* dz.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -108,7 +108,7 @@
 					};
 				};
 			};
-			buildConfigurationList = BEBFEABA30A95F6A0076E67D /* Build configuration list for PBXProject "Dz" */;
+			buildConfigurationList = BEBFEABA30A95F6A0076E67D /* Build configuration list for PBXProject "dz" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -122,7 +122,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				BEBFEABE30A95F6A0076E67D /* Dz */,
+				BEBFEABE30A95F6A0076E67D /* dz */,
 			);
 		};
 /* End PBXProject section */
@@ -286,7 +286,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Menubar MCP. Background computer-use for macOS.";
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.willuhd.dz;
-				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Dz/Stream/CodecBridge.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/dz/Stream/CodecBridge.h";
 				HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/.agents/tools/dav1d-1.5.1/include",
 					"$(SRCROOT)/.agents/tools/SVT-AV1-3.1.2/Source/API",
@@ -332,7 +332,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Menubar MCP. Background computer-use for macOS.";
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.willuhd.dz;
-				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Dz/Stream/CodecBridge.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/dz/Stream/CodecBridge.h";
 				HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/.agents/tools/dav1d-1.5.1/include",
 					"$(SRCROOT)/.agents/tools/SVT-AV1-3.1.2/Source/API",
@@ -363,7 +363,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		BEBFEABA30A95F6A0076E67D /* Build configuration list for PBXProject "Dz" */ = {
+		BEBFEABA30A95F6A0076E67D /* Build configuration list for PBXProject "dz" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BEBFEAC830A95F6A0076E67D /* Debug */,
@@ -372,7 +372,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		BEBFEACA30A95F6A0076E67D /* Build configuration list for PBXNativeTarget "Dz" */ = {
+		BEBFEACA30A95F6A0076E67D /* Build configuration list for PBXNativeTarget "dz" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BEBFEACB30A95F6A0076E67D /* Debug */,

@@ -17,15 +17,9 @@ Network Trash Folder
 Temporary Items
 .apdisk
 *.icloud
-# local build output
-.build/
-
-# swift typecheck module cache
-.swiftcache/
-
 # Xcode user state stays out of the repo
 *.xcuserstate
 xcuserdata/
 
-# vendored build tools for this project only
+# local build output and the codec tooling, both regenerated on demand
 .agents/
