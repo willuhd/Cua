@@ -40,7 +40,7 @@
   input[type=number]{font-variant-numeric:tabular-nums}
 
   section[hidden]{display:none}
-  .panel{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;margin-top:6px}
+  .panel{flex:0 0 auto;overflow-y:auto;overflow-x:hidden;margin-top:6px}
   .panel::-webkit-scrollbar{width:8px}
   .panel::-webkit-scrollbar-thumb{background:rgba(127,127,127,.28);border-radius:4px}
 
@@ -97,6 +97,9 @@ let lastHeight = 0;
 let inFlight = false;
 let pendingRefresh = false;
 let tab = "agents";
+// What the user has typed, kept across re-renders. The panels are rebuilt
+// wholesale when state changes, which would otherwise clear a field mid-word.
+const draft = { address: "", settings: {} };
 
 const $ = id => document.getElementById(id);
 
@@ -111,18 +114,22 @@ function el(tag, cls, text){
   if (text !== undefined) n.textContent = text;
   return n;
 }
-function postHeight(){
-  if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.dzHeight) return;
+// The popover is as tall as what is in it. There is no cap that would force a
+// scrollbar early and no periodic measurement, so it never resizes on its own.
+const maxHeight = 640;
+function contentHeight(){
   const head = document.querySelector('.head');
   const perms = $('perms');
   const panel = $('panel-' + tab);
-  const content = panel ? panel.scrollHeight : 0;
-  const desired = 10 + (head?.offsetHeight || 34) + perms.offsetHeight + Math.min(content, 340) + 12;
-  const h = Math.max(140, Math.min(430, Math.round(desired)));
-  if (h !== lastHeight) {
-    lastHeight = h;
-    window.webkit.messageHandlers.dzHeight.postMessage(h);
-  }
+  const panelHeight = panel ? panel.scrollHeight : 0;
+  return 10 + (head ? head.offsetHeight : 34) + perms.offsetHeight + panelHeight + 12;
+}
+function postHeight(){
+  if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.dzHeight) return;
+  const h = Math.max(140, Math.min(maxHeight, Math.round(contentHeight())));
+  if (Math.abs(h - lastHeight) < 1) return;
+  lastHeight = h;
+  window.webkit.messageHandlers.dzHeight.postMessage(h);
 }
 function sendPermRect(show, rect){
   if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.dzPermRect) return;
@@ -264,13 +271,20 @@ function renderRemote(s){
 
     P.append(el('div','group','Another Mac'));
     const addr = el('input');
-    addr.type = 'text'; addr.placeholder = 'host or 100.x address'; addr.value = s.lastAddress || '';
-    addr.style.width = '170px'; addr.style.textAlign = 'left';
+    addr.id = 'remote-address';
+    addr.type = 'text';
+    addr.placeholder = 'host or 100.x address';
+    addr.value = draft.address;
+    addr.style.width = '170px';
+    addr.style.textAlign = 'left';
+    addr.addEventListener('input', ev => { draft.address = ev.target.value; });
+    addr.addEventListener('keydown', ev => { if (ev.key === 'Enter') go.click(); });
     const go = el('button',null,'Connect'); go.type = 'button';
     go.onclick = () => postJSON('/api/session', {action:'client', address: addr.value}).then(refresh);
     const rowB = el('div','actions'); rowB.append(addr, go);
     P.append(rowB);
     P.append(el('div','note','Both Macs run dz. The other one presses Share This Mac first.'));
+    if (sess.error) P.append(el('div','note', sess.error));
   } else {
     P.append(el('div','group', sess.role === 'host' ? 'Sharing this Mac' : 'Connected'));
     const stats = [
@@ -324,10 +338,18 @@ function field(label, input){
   d.append(el('label','',label), input);
   return d;
 }
-function numberInput(value, min, max, step){
+function numberInput(value, min, max, step, key){
   const i = el('input');
-  i.type = 'number'; i.value = value; i.min = String(min); i.max = String(max);
+  i.type = 'number';
+  i.min = String(min); i.max = String(max);
   if (step) i.step = String(step);
+  if (key) {
+    i.id = 'setting-' + key;
+    i.value = draft.settings[key] !== undefined ? draft.settings[key] : value;
+    i.addEventListener('input', ev => { draft.settings[key] = ev.target.value; });
+  } else {
+    i.value = value;
+  }
   return i;
 }
 function renderSettings(s){
@@ -347,13 +369,13 @@ function renderSettings(s){
   }
   inputs.res = res;
   P.append(field('Resolution', res));
-  inputs.frameRate = numberInput(stream.frameRate ?? 75, 1, 240);
+  inputs.frameRate = numberInput(stream.frameRate ?? 75, 1, 240, null, 'frameRate');
   P.append(field('Frame rate', inputs.frameRate));
-  inputs.bitrate = numberInput(Math.round((stream.bitrate ?? 8000000) / 100000) / 10, 0.1, 200, 0.1);
+  inputs.bitrate = numberInput(Math.round((stream.bitrate ?? 8000000) / 100000) / 10, 0.1, 200, 0.1, 'bitrate');
   P.append(field('Bitrate (Mbps)', inputs.bitrate));
 
   P.append(el('div','group','Encoder'));
-  inputs.preset = numberInput(stream.preset ?? 10, 0, 13);
+  inputs.preset = numberInput(stream.preset ?? 10, 0, 13, null, 'preset');
   P.append(field('SVT preset', inputs.preset));
   const rc = el('select');
   for (const v of ['cbr','vbr']) {
@@ -365,9 +387,9 @@ function renderSettings(s){
   P.append(field('Rate control', rc));
 
   P.append(el('div','group','Network'));
-  inputs.fec = numberInput(Math.round((stream.fecOverhead ?? 0.2) * 100), 0, 100);
+  inputs.fec = numberInput(Math.round((stream.fecOverhead ?? 0.2) * 100), 0, 100, null, 'fec');
   P.append(field('Parity (%)', inputs.fec));
-  inputs.jitter = numberInput(stream.jitterFrames ?? 3, 1, 30);
+  inputs.jitter = numberInput(stream.jitterFrames ?? 3, 1, 30, null, 'jitter');
   P.append(field('Jitter buffer (frames)', inputs.jitter));
   const ptr = el('select');
   for (const v of ['free','locked']) {
@@ -379,7 +401,7 @@ function renderSettings(s){
   P.append(field('Pointer', ptr));
 
   P.append(el('div','group','Agent endpoint'));
-  inputs.port = numberInput(s.port ?? 3060, 1024, 65535);
+  inputs.port = numberInput(s.port ?? 3060, 1024, 65535, null, 'port');
   P.append(field('MCP port', inputs.port));
   P.append(el('div','note','Pinned values. Nothing here adapts: the stream runs at what you set or not at all.'));
 
@@ -403,6 +425,7 @@ function renderSettings(s){
       if (r.ok) setTimeout(() => location.replace('http://127.0.0.1:' + port + '/'), 400);
       return;
     }
+    draft.settings = {};
     apply.textContent = 'Saved';
     setTimeout(() => { apply.textContent = 'Apply'; }, 1200);
     refresh();
@@ -438,15 +461,375 @@ async function refresh(force){
   inFlight = false;
   state = s;
   const sig = signature(s);
-  if (sig !== lastSig) { lastSig = sig; render(s); }
+  if (sig !== lastSig) {
+    lastSig = sig;
+    if (isTyping()) renderRemoteStatsOnly(s);
+    else render(s);
+  }
   else postHeight();
   if (pendingRefresh) { pendingRefresh = false; refresh(); }
 }
 // The elapsed times and the session counters go stale while the popover is open.
+function isTyping(){
+  const a = document.activeElement;
+  return !!a && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA');
+}
+
+for (const b of document.querySelectorAll('.tabs [data-tab]')) {
+    b.setAttribute('aria-selected', String(b.dataset.tab === name));
+  }
+  for (const id of ['agents','remote','settings']) {
+    $('panel-' + id).hidden = id !== name;
+  }
+  if (state) render(state);
+}
+
+// ---------- permissions ----------
+function renderPerms(s){
+  const P = $('perms');
+  P.replaceChildren();
+  if (s.ax && s.scr) { sendPermRect(false); return; }
+  const card = el('div','perm-card');
+  const iconWrap = el('div','perm-icon');
+  if (s.appIcon) {
+    const img = el('img');
+    img.src = 'data:image/png;base64,' + s.appIcon;
+    img.alt = 'dz';
+    img.draggable = true;
+    img.title = 'Drag dz.app into the permission list';
+    img.addEventListener('dragstart', ev => {
+      if (!s.appPath) return;
+      ev.dataTransfer.setData('text/uri-list', encodeURI('file://' + s.appPath));
+      ev.dataTransfer.setData('text/plain', s.appPath);
+      ev.dataTransfer.effectAllowed = 'copy';
+    });
+    iconWrap.append(img);
+  }
+  const rows = el('div','perm-rows');
+  for (const r of [{ok:s.scr, label:'Screen Recording'}, {ok:s.ax, label:'Accessibility'}]) {
+    const d = el('div','perm-row');
+    d.append(el('span','st ' + (r.ok ? 'ok' : 'bad'), r.ok ? '\u2713' : '\u2715'));
+    d.append(document.createTextNode(r.label));
+    rows.append(d);
+  }
+  card.append(iconWrap, rows);
+  P.append(card);
+  const actions = el('div','perm-actions');
+  const open = el('button', null, 'Open Settings'); open.type = 'button';
+  open.onclick = async () => { await postJSON('/api/open-settings', {}); };
+  const grant = el('button', null, 'Grant'); grant.type = 'button';
+  grant.onclick = async () => { await postJSON('/api/grant', {}); setTimeout(refresh, 900); };
+  actions.append(open, grant);
+  P.append(actions);
+  requestAnimationFrame(() => {
+    if (s.appIcon) sendPermRect(true, iconWrap.getBoundingClientRect());
+    else sendPermRect(false);
+  });
+}
+
+// ---------- agents ----------
+function ago(ms){
+  if (!ms) return 'never';
+  const m = Math.floor((Date.now() - ms) / 60000);
+  if (m < 1) return 'now';
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h';
+  return Math.floor(h / 24) + 'd';
+}
+function renderAgents(s){
+  const P = $('panel-agents');
+  P.replaceChildren();
+  const apps = s.apps || [];
+  if (!apps.length) {
+    P.append(el('div','empty','No apps held. An agent appears here when it takes one.'));
+    return;
+  }
+  for (const a of apps) {
+    const d = el('div','row');
+    const img = el('img');
+    img.src = a.icon ? 'data:image/png;base64,' + a.icon : '';
+    const name = el('span','name', a.app);
+    name.title = a.app;
+    const last = el('span','ago', ago(a.lastActivity));
+    last.title = 'Last time an agent touched this app';
+    const tok = el('span','tok', a.token ? a.token : '');
+    tok.title = 'The token the agent presents';
+    const b = el('button','','Stop'); b.type = 'button';
+    b.title = 'Drop this app\'s leases and stop a grant holding this Mac';
+    b.onclick = () => postJSON('/api/free', {pid:a.pid}).then(refresh);
+    d.append(img, name, last, tok, b);
+    P.append(d);
+  }
+  const fg = s.foreground || {mode:'idle'};
+  if (fg.mode === 'pending') {
+    const box = el('div','note');
+    box.append(el('div','', 'Full Mac control requested by ' + (fg.agent || 'an agent')));
+    const allow = el('button','primary','End all background & allow'); allow.type = 'button';
+    allow.onclick = async () => {
+      allow.disabled = true; allow.textContent = 'Waiting\u2026';
+      let ok = false;
+      try { ok = (await postJSON('/api/foreground', {action:'approve', requestId:fg.requestId})).ok; } catch (e) {}
+      if (!ok && allow.isConnected) { allow.disabled = false; allow.textContent = 'End all background & allow'; }
+      refresh();
+    };
+    const deny = el('button',null,'Deny'); deny.type = 'button';
+    deny.onclick = async () => { await postJSON('/api/foreground', {action:'deny', requestId:fg.requestId}); refresh(); };
+    if (!window.__DZ_UI_TOKEN) { allow.disabled = true; deny.disabled = true; }
+    box.append(allow, deny);
+    P.append(box);
+  } else if (fg.mode === 'active') {
+    const box = el('div','note');
+    box.append(el('div','', 'Full Mac control: ' + (fg.agent || 'agent')));
+    if (fg.observation === 'needs-screenshot') box.append(el('div','', 'Needs a first screenshot.'));
+    else if (fg.observation === 'stale') box.append(el('div','', 'Screen changed; agent will re-check.'));
+    const stop = el('button',null,'Stop'); stop.type = 'button';
+    stop.onclick = async () => { await postJSON('/api/foreground', {action:'stop'}); refresh(); };
+    if (!window.__DZ_UI_TOKEN) stop.disabled = true;
+    box.append(stop);
+    P.append(box);
+  }
+}
+
+// ---------- remote ----------
+function renderRemote(s){
+  const P = $('panel-remote');
+  P.replaceChildren();
+  const sess = s.session || {role:'idle'};
+  const stream = s.stream || {};
+
+  if (sess.role === 'idle') {
+    P.append(el('div','group','This Mac'));
+    const share = el('button','primary','Share This Mac'); share.type = 'button';
+    share.onclick = () => postJSON('/api/session', {action:'host'}).then(refresh);
+    const rowA = el('div','actions'); rowA.append(share);
+    P.append(rowA);
+
+    P.append(el('div','group','Another Mac'));
+    const addr = el('input');
+    addr.id = 'remote-address';
+    addr.type = 'text';
+    addr.placeholder = 'host or 100.x address';
+    addr.value = draft.address;
+    addr.style.width = '170px';
+    addr.style.textAlign = 'left';
+    addr.addEventListener('input', ev => { draft.address = ev.target.value; });
+    addr.addEventListener('keydown', ev => { if (ev.key === 'Enter') go.click(); });
+    const go = el('button',null,'Connect'); go.type = 'button';
+    go.onclick = () => postJSON('/api/session', {action:'client', address: addr.value}).then(refresh);
+    const rowB = el('div','actions'); rowB.append(addr, go);
+    P.append(rowB);
+    P.append(el('div','note','Both Macs run dz. The other one presses Share This Mac first.'));
+    if (sess.error) P.append(el('div','note', sess.error));
+  } else {
+    P.append(el('div','group', sess.role === 'host' ? 'Sharing this Mac' : 'Connected'));
+    const stats = [
+      ['Status', sess.status || ''],
+      ['Encode rate', (Math.round((sess.fps || 0) * 10) / 10) + ' fps'],
+      ['Target', (sess.targetFps || stream.frameRate || 0) + ' fps'],
+      ['Frames', String(sess.frames || 0)],
+      ['Packets', String(sess.packets || 0)],
+    ];
+    if (sess.skipped) stats.push(['Skipped', String(sess.skipped)]);
+    if (sess.dropped) stats.push(['Dropped', String(sess.dropped)]);
+    if (sess.bytes) stats.push(['Sent', (sess.bytes / 1048576).toFixed(1) + ' MB']);
+    for (const [k,v] of stats) {
+      const d = el('div','stat');
+      d.append(el('span','',k), el('span','',v));
+      P.append(d);
+    }
+    const stop = el('button',null,'Stop Session'); stop.type = 'button';
+    stop.onclick = () => postJSON('/api/session', {action:'stop'}).then(refresh);
+    const row = el('div','actions'); row.append(stop);
+    P.append(row);
+  }
+
+  const remote = s.remote || {};
+  P.append(el('div','group','Agent endpoint'));
+  const state = el('div','stat');
+  state.append(el('span','','Shared over the tailnet'),
+                el('span','', remote.expose ? 'on' : 'off'));
+  P.append(state);
+  if (remote.expose) {
+    const addr = remote.address || 'no tailnet address';
+    const url = el('div','stat');
+    url.append(el('span','','URL'), el('span','', 'http://' + addr + ':' + (s.port || 3060) + '/mcp'));
+    P.append(url);
+    const tok = el('div','stat');
+    tok.append(el('span','','Token'), el('span','', remote.token || ''));
+    P.append(tok);
+    P.append(el('div','note','Send it as an Authorization: Bearer header. Tailscale proves which device is calling, not who is using it.'));
+  }
+  const toggle = el('button', remote.expose ? '' : 'primary', remote.expose ? 'Stop Sharing Endpoint' : 'Share Agent Endpoint');
+  toggle.type = 'button';
+  toggle.onclick = () => postJSON('/api/remote', {expose: !remote.expose}).then(refresh);
+  const rowE = el('div','actions');
+  rowE.append(toggle);
+  P.append(rowE);
+}
+
+// ---------- settings ----------
+function field(label, input){
+  const d = el('div','field');
+  d.append(el('label','',label), input);
+  return d;
+}
+function numberInput(value, min, max, step, key){
+  const i = el('input');
+  i.type = 'number';
+  i.min = String(min); i.max = String(max);
+  if (step) i.step = String(step);
+  if (key) {
+    i.id = 'setting-' + key;
+    i.value = draft.settings[key] !== undefined ? draft.settings[key] : value;
+    i.addEventListener('input', ev => { draft.settings[key] = ev.target.value; });
+  } else {
+    i.value = value;
+  }
+  return i;
+}
+function renderSettings(s){
+  const P = $('panel-settings');
+  P.replaceChildren();
+  const stream = s.stream || {};
+  const inputs = {};
+
+  P.append(el('div','group','Video'));
+  const presets = [[3840,2160],[2560,1440],[1920,1080],[1600,900],[1280,720]];
+  const res = el('select');
+  for (const [w,h] of presets) {
+    const o = el('option',null,w + ' \u00d7 ' + h);
+    o.value = w + 'x' + h;
+    if (Number(stream.width) === w && Number(stream.height) === h) o.selected = true;
+    res.append(o);
+  }
+  inputs.res = res;
+  P.append(field('Resolution', res));
+  inputs.frameRate = numberInput(stream.frameRate ?? 75, 1, 240, null, 'frameRate');
+  P.append(field('Frame rate', inputs.frameRate));
+  inputs.bitrate = numberInput(Math.round((stream.bitrate ?? 8000000) / 100000) / 10, 0.1, 200, 0.1, 'bitrate');
+  P.append(field('Bitrate (Mbps)', inputs.bitrate));
+
+  P.append(el('div','group','Encoder'));
+  inputs.preset = numberInput(stream.preset ?? 10, 0, 13, null, 'preset');
+  P.append(field('SVT preset', inputs.preset));
+  const rc = el('select');
+  for (const v of ['cbr','vbr']) {
+    const o = el('option',null,v.toUpperCase()); o.value = v;
+    if ((stream.rateControl || 'cbr') === v) o.selected = true;
+    rc.append(o);
+  }
+  inputs.rateControl = rc;
+  P.append(field('Rate control', rc));
+
+  P.append(el('div','group','Network'));
+  inputs.fec = numberInput(Math.round((stream.fecOverhead ?? 0.2) * 100), 0, 100, null, 'fec');
+  P.append(field('Parity (%)', inputs.fec));
+  inputs.jitter = numberInput(stream.jitterFrames ?? 3, 1, 30, null, 'jitter');
+  P.append(field('Jitter buffer (frames)', inputs.jitter));
+  const ptr = el('select');
+  for (const v of ['free','locked']) {
+    const o = el('option',null,v === 'free' ? 'Free (desktop)' : 'Locked (game)'); o.value = v;
+    if ((stream.pointer || 'free') === v) o.selected = true;
+    ptr.append(o);
+  }
+  inputs.pointer = ptr;
+  P.append(field('Pointer', ptr));
+
+  P.append(el('div','group','Agent endpoint'));
+  inputs.port = numberInput(s.port ?? 3060, 1024, 65535, null, 'port');
+  P.append(field('MCP port', inputs.port));
+  P.append(el('div','note','Pinned values. Nothing here adapts: the stream runs at what you set or not at all.'));
+
+  const apply = el('button','primary','Apply'); apply.type = 'button';
+  apply.onclick = async () => {
+    const [w, h] = res.value.split('x').map(Number);
+    const patch = {
+      width: w, height: h,
+      frameRate: Number(inputs.frameRate.value),
+      bitrate: Math.round(Number(inputs.bitrate.value) * 1000000),
+      preset: Number(inputs.preset.value),
+      rateControl: rc.value,
+      fecOverhead: Number(inputs.fec.value) / 100,
+      jitterFrames: Number(inputs.jitter.value),
+      pointer: ptr.value,
+    };
+    await postJSON('/api/settings', patch);
+    const port = Number(inputs.port.value);
+    if (port && port !== s.port) {
+      const r = await postJSON('/api/port', {port});
+      if (r.ok) setTimeout(() => location.replace('http://127.0.0.1:' + port + '/'), 400);
+      return;
+    }
+    draft.settings = {};
+    apply.textContent = 'Saved';
+    setTimeout(() => { apply.textContent = 'Apply'; }, 1200);
+    refresh();
+  };
+  const row = el('div','actions'); row.append(apply);
+  P.append(row);
+}
+
+// ---------- refresh loop ----------
+function signature(s){
+  return JSON.stringify({
+    ax:s.ax, scr:s.scr, port:s.port, tab,
+    session: s.session ? [s.session.role, s.session.frames, s.session.packets, s.session.fps, s.session.status] : null,
+    apps:(s.apps || []).map(x => [x.pid, x.lastActivity, x.token]),
+    fg: s.foreground ? [s.foreground.mode, s.foreground.requestId, s.foreground.observation] : null,
+    stream: s.stream,
+  });
+}
+function render(s){
+  renderPerms(s);
+  if (tab === 'agents') renderAgents(s);
+  if (tab === 'remote') renderRemote(s);
+  if (tab === 'settings') renderSettings(s);
+  postHeight();
+}
+async function refresh(force){
+  if (document.hidden && !force) return;
+  if (inFlight) { pendingRefresh = true; return; }
+  inFlight = true;
+  let s;
+  try { s = await (await fetch('/api/state', {cache:'no-store'})).json(); }
+  catch (e) { inFlight = false; if (pendingRefresh) { pendingRefresh = false; refresh(); } return; }
+  inFlight = false;
+  state = s;
+  const sig = signature(s);
+  if (sig !== lastSig) {
+    lastSig = sig;
+    if (isTyping()) renderRemoteStatsOnly(s);
+    else render(s);
+  }
+  else postHeight();
+  if (pendingRefresh) { pendingRefresh = false; refresh(); }
+}
+// The elapsed times and the session counters go stale while the popover is open.
+function isTyping(){
+  const a = document.activeElement;
+  return !!a && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA');
+}
 setInterval(() => {
-  if (document.hidden || !state) return;
-  if (tab === 'agents' || tab === 'remote') render(state);
+  if (document.hidden || !state || isTyping()) return;
+  if (tab === 'agents') render(state);
+  else if (tab === 'remote') renderRemoteStatsOnly(state);
 }, 2000);
+
+// Only the live numbers move, so the rest of the panel is left alone.
+function renderRemoteStatsOnly(s){
+  const P = $('panel-remote');
+  const sess = s.session || {role:'idle'};
+  if (sess.role === 'idle') return;
+  for (const node of P.querySelectorAll('.stat')) {
+    const label = node.firstChild ? node.firstChild.textContent : '';
+    const value = node.lastChild;
+    if (!value) continue;
+    if (label === 'Encode rate') value.textContent = (Math.round((sess.fps || 0) * 10) / 10) + ' fps';
+    if (label === 'Frames') value.textContent = String(sess.frames || 0);
+    if (label === 'Packets') value.textContent = String(sess.packets || 0);
+  }
+}
 
 for (const b of document.querySelectorAll('.tabs [data-tab]')) {
   b.onclick = () => switchTab(b.dataset.tab);

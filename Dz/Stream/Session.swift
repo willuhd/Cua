@@ -34,6 +34,8 @@ final class HostSession {
 
     private var control: ControlChannel?
     private let clipboard = ClipboardSync()
+    private let loopFinished = DispatchSemaphore(value: 0)
+    private var loopRunning = false
     private let encodeQueue = DispatchQueue(label: "dz.encode", qos: .userInteractive)
     private let controlQueue = DispatchQueue(label: "dz.control.accept", qos: .userInteractive)
     private var frameIndex: UInt32 = 0
@@ -175,6 +177,8 @@ final class HostSession {
     func stop() {
         clipboard.stop()
         statsTimer?.cancel()
+        // A frame may be mid-encode; the encoder must not be released under it.
+        encodeQueue.sync { }
         statsTimer = nil
         source.stop()
         control?.close()
@@ -193,6 +197,8 @@ final class ClientSession {
     private let receiveQueue = DispatchQueue(label: "dz.receive", qos: .userInteractive)
     private let display = try? DisplayConverter()
     private let clipboard = ClipboardSync()
+    private let loopFinished = DispatchSemaphore(value: 0)
+    private var loopRunning = false
 
     let view: StreamView
     private var running = false
@@ -237,8 +243,22 @@ final class ClientSession {
     }
 
     func start() {
-        stateLock.lock(); running = true; stateLock.unlock()
-        receiveQueue.async { [weak self] in self?.receiveLoop() }
+        view.setStatus("Connecting...")
+        stateLock.lock(); running = true; loopRunning = true; stateLock.unlock()
+        // If nothing arrives, say so rather than showing an empty window. The
+        // usual cause is the other Mac not sharing yet.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            guard let self else { return }
+            self.stateLock.lock(); let shown = self.framesShown; let alive = self.running
+            self.stateLock.unlock()
+            if alive && shown == 0 {
+                self.view.setStatus("Connected, no frames yet. Is the other Mac sharing?")
+            }
+        }
+        receiveQueue.async { [weak self] in
+            self?.receiveLoop()
+            self?.loopFinished.signal()
+        }
     }
 
     private func receiveLoop() {
@@ -269,7 +289,11 @@ final class ClientSession {
 
     func stop() {
         clipboard.stop()
-        stateLock.lock(); running = false; stateLock.unlock()
+        stateLock.lock(); running = false; let wasRunning = loopRunning; loopRunning = false
+        stateLock.unlock()
         control.close()
+        // Wait for the loop to leave before the decoder and the view are
+        // released, otherwise a frame is decoded into a freed context.
+        if wasRunning { _ = loopFinished.wait(timeout: .now() + 2) }
     }
 }

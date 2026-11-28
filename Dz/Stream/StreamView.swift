@@ -22,6 +22,9 @@ final class StreamView: NSView {
     private var textureCache: CVMetalTextureCache?
 
     private var currentFrame: CVPixelBuffer?
+    private var statusText = "Waiting for frames..."
+    private var statusLayer: CATextLayer?
+    private var framesSeen = 0
     private let stateLock = NSLock()
 
     override init(frame: NSRect) {
@@ -29,24 +32,89 @@ final class StreamView: NSView {
         queue = device?.makeCommandQueue()
         super.init(frame: frame)
         wantsLayer = true
-        guard let device, let layer = layer as? CAMetalLayer ?? makeLayer(device) else { return }
-        layer.device = device
-        layer.pixelFormat = .bgra8Unorm
-        layer.framebufferOnly = true
-        layer.isOpaque = true
-        layer.contentsGravity = .resizeAspect
+        guard let device, let metalLayer = layer as? CAMetalLayer else { return }
+        metalLayer.device = device
+        metalLayer.pixelFormat = .bgra8Unorm
+        metalLayer.framebufferOnly = true
+        metalLayer.isOpaque = true
+        metalLayer.allowsNextDrawableTimeout = false
         CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
-        buildPipeline(device: device, pixelFormat: layer.pixelFormat)
+        buildPipeline(device: device, pixelFormat: metalLayer.pixelFormat)
+        updateDrawableSize()
+
+        // A status line over the video. A blank window is otherwise impossible
+        // to tell apart from a window that is working and waiting.
+        let text = CATextLayer()
+        text.fontSize = 13
+        text.alignmentMode = .center
+        text.foregroundColor = NSColor.white.withAlphaComponent(0.75).cgColor
+        text.contentsScale = 2
+        metalLayer.addSublayer(text)
+        statusLayer = text
     }
 
-    required init?(coder: NSCoder) { fatalError("not used") }
+    /// What to show before the first frame, so a viewer knows what stage it is
+    /// at rather than staring at black.
+    func setStatus(_ text: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.statusText = text
+            self.updateStatusLayer()
+            self.needsDisplay = true
+            self.displayIfNeeded()
+        }
+    }
 
-    private func makeLayer(_ device: MTLDevice) -> CAMetalLayer? {
+    private func updateStatusLayer() {
+        guard let statusLayer, let metalLayer = layer as? CAMetalLayer else { return }
+        let show = framesSeen == 0
+        statusLayer.isHidden = !show
+        guard show else { return }
+        let scale = window?.backingScaleFactor ?? 2
+        statusLayer.contentsScale = scale
+        statusLayer.string = statusText
+        statusLayer.frame = CGRect(x: 0, y: (bounds.height - 20) / 2,
+                                   width: bounds.width, height: 20)
+        _ = metalLayer
+    }
+
+    /// A CAMetalLayer renders into whatever its drawable size says. Left at
+    /// zero, which is the default, every nextDrawable returns nil and the view
+    /// stays blank however many frames arrive.
+    override func makeBackingLayer() -> CALayer {
         let metalLayer = CAMetalLayer()
-        metalLayer.device = device
-        layer = metalLayer
+        metalLayer.isOpaque = true
         return metalLayer
     }
+
+    private func updateDrawableSize() {
+        guard let metalLayer = layer as? CAMetalLayer else { return }
+        let scale = window?.backingScaleFactor ?? 2
+        metalLayer.contentsScale = scale
+        let size = bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        let drawable = CGSize(width: size.width * scale, height: size.height * scale)
+        if metalLayer.drawableSize != drawable {
+            metalLayer.drawableSize = drawable
+            metalLayer.needsDisplayOnBoundsChange = true
+        }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateDrawableSize()
+        updateStatusLayer()
+        needsDisplay = true
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateDrawableSize()
+        needsDisplay = true
+    }
+
+
+    required init?(coder: NSCoder) { fatalError("not used") }
 
     override var isFlipped: Bool { true }
 
@@ -54,8 +122,18 @@ final class StreamView: NSView {
     func display(_ buffer: CVPixelBuffer) {
         stateLock.lock()
         currentFrame = buffer
+        framesSeen += 1
+        let first = framesSeen == 1
         stateLock.unlock()
-        needsDisplay = true
+        if first {
+            DispatchQueue.main.async { [weak self] in
+                self?.statusLayer?.isHidden = true
+            }
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.needsDisplay = true
+            self?.displayIfNeeded()
+        }
     }
 
     private func buildPipeline(device: MTLDevice, pixelFormat: MTLPixelFormat) {
@@ -71,9 +149,11 @@ final class StreamView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        updateDrawableSize()
         guard let device, let queue, let pipeline, let textureCache,
-              let layer = layer as? CAMetalLayer,
-              let drawable = layer.nextDrawable(),
+              let metalLayer = layer as? CAMetalLayer,
+              metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0,
+              let drawable = metalLayer.nextDrawable(),
               let commandBuffer = queue.makeCommandBuffer() else { return }
 
         stateLock.lock()
@@ -122,6 +202,8 @@ final class StreamView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         window?.makeFirstResponder(self)
+        updateDrawableSize()
+        needsDisplay = true
         if trackingAreas.isEmpty {
             addTrackingArea(NSTrackingArea(rect: .zero,
                                            options: [.activeInKeyWindow, .mouseMoved, .inVisibleRect],

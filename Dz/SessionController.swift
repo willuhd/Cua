@@ -18,6 +18,8 @@ final class SessionController: NSObject {
     }
 
     private(set) var role: Role?
+    /// Why the last attempt failed, for the popover to show.
+    private(set) var lastError: String?
     private var host: HostSession?
     private var client: ClientSession?
     private var window: NSWindow?
@@ -30,6 +32,7 @@ final class SessionController: NSObject {
     /// Everything the popover needs to render the Remote tab.
     var snapshot: [String: Any] {
         var out: [String: Any] = ["role": role?.rawValue ?? "idle", "status": status]
+        if let lastError { out["error"] = lastError }
         switch role {
         case .host:
             out["frames"] = host?.framesSent ?? 0
@@ -70,6 +73,7 @@ final class SessionController: NSObject {
 
     func startHosting(settings: StreamSettings) {
         guard role == nil else { return }
+        lastError = nil
         do {
             let session = try HostSession(settings: settings)
             host = session
@@ -94,6 +98,12 @@ final class SessionController: NSObject {
 
     func connect(to address: String, settings: StreamSettings) {
         guard role == nil else { return }
+        lastError = nil
+        guard !address.trimmingCharacters(in: .whitespaces).isEmpty else {
+            lastError = "Enter the other Mac's address first"
+            onChange?()
+            return
+        }
         do {
             let session = try ClientSession(settings: settings, host: address)
             client = session
@@ -146,6 +156,8 @@ final class SessionController: NSObject {
     }
 
     private func present(_ error: Error, title: String) {
+        lastError = title + ": " + String(describing: error)
+        onChange?()
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = "\(error)"
@@ -157,6 +169,9 @@ final class SessionController: NSObject {
 
 extension SessionController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
+        // Detach the window before anything else: AppKit is still finishing
+        // the close, and releasing it here is what was crashing.
+        window = nil
         if role == .client { stop() }
     }
 }
