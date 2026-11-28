@@ -364,13 +364,13 @@ function renderSettings(s){
   }
   inputs.res = res;
   P.append(field('Resolution', res));
-  inputs.frameRate = numberInput(stream.frameRate ?? 75, 1, 240, 'frameRate');
+  inputs.frameRate = numberInput(stream.frameRate ?? 75, 1, 240, null, 'frameRate');
   P.append(field('Frame rate', inputs.frameRate));
   inputs.bitrate = numberInput(Math.round((stream.bitrate ?? 8000000) / 100000) / 10, 0.1, 200, 0.1, 'bitrate');
   P.append(field('Bitrate (Mbps)', inputs.bitrate));
 
   P.append(el('div','group','Encoder'));
-  inputs.preset = numberInput(stream.preset ?? 10, 0, 13, 'preset');
+  inputs.preset = numberInput(stream.preset ?? 10, 0, 13, null, 'preset');
   P.append(field('SVT preset', inputs.preset));
   const rc = el('select');
   for (const v of ['cbr','vbr']) {
@@ -382,9 +382,9 @@ function renderSettings(s){
   P.append(field('Rate control', rc));
 
   P.append(el('div','group','Network'));
-  inputs.fec = numberInput(Math.round((stream.fecOverhead ?? 0.2) * 100), 0, 100, 'fec');
+  inputs.fec = numberInput(Math.round((stream.fecOverhead ?? 0.2) * 100), 0, 100, null, 'fec');
   P.append(field('Parity (%)', inputs.fec));
-  inputs.jitter = numberInput(stream.jitterFrames ?? 3, 1, 30, 'jitter');
+  inputs.jitter = numberInput(stream.jitterFrames ?? 3, 1, 30, null, 'jitter');
   P.append(field('Jitter buffer (frames)', inputs.jitter));
   const ptr = el('select');
   for (const v of ['free','locked']) {
@@ -396,7 +396,7 @@ function renderSettings(s){
   P.append(field('Pointer', ptr));
 
   P.append(el('div','group','Agent endpoint'));
-  inputs.port = numberInput(s.port ?? 3060, 1024, 65535, 'port');
+  inputs.port = numberInput(s.port ?? 3060, 1024, 65535, null, 'port');
   P.append(field('MCP port', inputs.port));
   P.append(el('div','note','Pinned values. Nothing here adapts: the stream runs at what you set or not at all.'));
 
