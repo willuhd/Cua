@@ -42,7 +42,11 @@ final class VideoSender {
 
         to.sin_family = sa_family_t(AF_INET)
         to.sin_port = port.bigEndian
-        guard inet_pton(AF_INET, host, &to.sin_addr) == 1 else {
+        guard let resolved = NetworkAddress.ipv4(host) else {
+            close(fd); fd = -1
+            throw TransportError.address(host)
+        }
+        guard inet_pton(AF_INET, resolved, &to.sin_addr) == 1 else {
             close(fd); fd = -1
             throw TransportError.address(host)
         }

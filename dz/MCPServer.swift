@@ -543,6 +543,11 @@ final class MCPServer: NSObject {
             let payload: [String: Any] = ["version": dzVersion,
                                           "session": SessionController.shared.snapshot,
                                           "stream": StreamProfile.json(profileSnapshot),
+                                          "hosts": HostStore.shared.json,
+                                          "displays": HostSession.availableDisplays().map {
+                                              ["id": Int($0.id), "name": $0.name, "width": $0.width,
+                                               "height": $0.height, "scale": $0.scale, "main": $0.main] as [String: Any]
+                                          },
                                           "port": Int(port), "url": "http://127.0.0.1:\(port)/mcp", "perms": perms,
                                           "ax": ax, "scr": scr, "sessions": sessions, "apps": apps,
                                           "appIcon": iconBase64Cached(pid: getpid()),
@@ -610,28 +615,107 @@ final class MCPServer: NSObject {
         if pathOnly == "/api/settings" && req.method == "POST" {
             guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
             let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
-            let updated = StreamProfile.save(StreamProfile.apply(obj, to: StreamProfile.load()))
-            let payload: [String: Any] = ["ok": true, "stream": StreamProfile.json(updated)]
-            send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
+            if SessionController.shared.role == .client {
+                let current = SessionController.shared.sessionSettings ?? StreamProfile.load()
+                let updated = StreamProfile.apply(obj, to: current)
+                if let name = obj["profileName"] as? String {
+                    SessionController.shared.setProfileName(name)
+                }
+                DispatchQueue.main.async { SessionController.shared.updateSettings(updated) }
+                let payload: [String: Any] = ["ok": true, "stream": StreamProfile.json(updated),
+                                              "applied": true]
+                send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
+            } else {
+                let updated = StreamProfile.save(StreamProfile.apply(obj, to: StreamProfile.load()))
+                let payload: [String: Any] = ["ok": true, "stream": StreamProfile.json(updated)]
+                send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
+            }
             return
         }
         if pathOnly == "/api/session" && req.method == "POST" {
             guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
             let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
             let action = (obj["action"] as? String ?? "").lowercased()
-            let address = (obj["address"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let profile = StreamProfile.load()
-            // Starting a session touches AppKit, so it belongs on the main thread.
-            DispatchQueue.main.async {
-                switch action {
-                case "host": SessionController.shared.startHosting(settings: profile)
-                case "client" where !address.isEmpty: SessionController.shared.connect(to: address, settings: profile)
-                case "stop": SessionController.shared.stop()
-                default: break
+            let address = SavedHost.normalizedAddress((obj["address"] as? String) ?? "")
+            let hostID = obj["hostId"] as? String
+            let saved = hostID.flatMap { HostStore.shared.find($0) }
+            let profile = saved?.settings ?? StreamProfile.load()
+            let displayValue = (obj["displayId"] as? Int) ?? (obj["displayId"] as? Double).flatMap { Int(exactly: $0) }
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let displays = SessionController.shared.availableDisplays
+                if action == "host", displayValue == nil, displays.count > 1 {
+                    let payload: [String: Any] = ["ok": true, "requested": "host",
+                                                  "needsDisplaySelection": true,
+                                                  "displays": displays.map {
+                                                      ["id": Int($0.id), "name": $0.name,
+                                                       "width": $0.width, "height": $0.height,
+                                                       "main": $0.main] as [String: Any]
+                                                  }]
+                    self.send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
+                    return
                 }
+                switch action {
+                case "host":
+                    SessionController.shared.startHosting(settings: profile,
+                                                          displayID: CGDirectDisplayID(displayValue ?? Int(CGMainDisplayID())))
+                case "client":
+                    let target = saved?.address ?? address
+                    if !target.isEmpty {
+                        SessionController.shared.connect(to: target, settings: profile,
+                                                         hostID: saved?.id,
+                                                         profileName: saved?.profileName)
+                    }
+                case "stop":
+                    SessionController.shared.stop()
+                default:
+                    break
+                }
+                let payload: [String: Any] = ["ok": true, "requested": action]
+                self.send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
             }
-            let payload: [String: Any] = ["ok": true, "requested": action]
+            return
+        }
+
+        if pathOnly == "/api/hosts" && req.method == "POST" {
+            guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
+            let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+            let action = (obj["action"] as? String ?? "").lowercased()
+            var saved: SavedHost?
+            switch action {
+            case "add":
+                let alias = ((obj["alias"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let address = SavedHost.normalizedAddress((obj["address"] as? String) ?? "")
+                guard !alias.isEmpty, !address.isEmpty else {
+                    send(fd, status: "400 Bad Request", body: Data("{\"error\":\"alias and address are required\"}".utf8))
+                    return
+                }
+                let name = ((obj["profileName"] as? String) ?? "Default").trimmingCharacters(in: .whitespacesAndNewlines)
+                let settings = StreamProfile.apply(obj["settings"] as? [String: Any] ?? [:], to: StreamProfile.defaults)
+                saved = HostStore.shared.add(alias: alias, address: address, profileName: name, settings: settings)
+            case "update":
+                guard let id = obj["id"] as? String, var host = HostStore.shared.find(id) else {
+                    send(fd, status: "404 Not Found", body: Data("{\"error\":\"unknown host\"}".utf8))
+                    return
+                }
+                if let alias = obj["alias"] as? String { host.alias = alias.trimmingCharacters(in: .whitespacesAndNewlines) }
+                if let address = obj["address"] as? String { host.address = SavedHost.normalizedAddress(address) }
+                if let name = obj["profileName"] as? String { host.profileName = name.trimmingCharacters(in: .whitespacesAndNewlines) }
+                if let patch = obj["settings"] as? [String: Any] {
+                    host.settings = StreamProfile.apply(patch, to: host.settings)
+                }
+                saved = HostStore.shared.update(host)
+            case "delete":
+                if let id = obj["id"] as? String { HostStore.shared.delete(id) }
+            default:
+                send(fd, status: "400 Bad Request", body: Data("{\"error\":\"unknown host action\"}".utf8))
+                return
+            }
+            var payload: [String: Any] = ["ok": true, "hosts": HostStore.shared.json]
+            if let saved { payload["host"] = saved.json }
             send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])
+            SessionController.shared.onChange?()
             return
         }
         if pathOnly == "/api/share" && req.method == "POST" {

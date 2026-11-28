@@ -27,6 +27,7 @@ enum SelfTest {
         if !pipelineTest() { failures += 1 }
         if !colourTest() { failures += 1 }
         if !controlTest() { failures += 1 }
+        if !configurationTest() { failures += 1 }
         if !renderTest() { failures += 1 }
 
         say(failures == 0 ? "PASS" : "FAIL: " + String(failures) + " check(s) failed")
@@ -379,6 +380,55 @@ enum SelfTest {
         let sizeText = firstSize.isEmpty ? "none" : firstSize
         say("  captured " + String(captured) + " frames, first " + sizeText)
         return captured > 0 ? 0 : 1
+    }
+
+    // MARK: - configuration
+
+    private static func configurationTest() -> Bool {
+        var settings = StreamSettings()
+        settings.width = 1280
+        settings.height = 720
+        settings.frameRate = 60
+        settings.bitrate = 4_000_000
+        settings = (try? settings.validated()) ?? settings
+
+        let display = HostDisplay(id: 7, name: "Test", width: 1920, height: 1080,
+                                  scale: 2, main: true)
+        let state = HostSessionState(hostName: "host", displays: [display],
+                                     displayID: 7, settings: settings,
+                                     configured: true, error: nil)
+        guard let encoded = ControlFraming.encode(.hostState(state)),
+              let decoded = ControlFraming.encode(.configure(settings)) else {
+            say("  FAIL: configuration framing")
+            return false
+        }
+        var hostBuffer = encoded
+        var configBuffer = decoded
+        var corrupt = false
+        let hostMessages = ControlFraming.drain(&hostBuffer, corrupted: &corrupt)
+        let configMessages = ControlFraming.drain(&configBuffer, corrupted: &corrupt)
+        guard !corrupt, hostMessages.count == 1, configMessages.count == 1,
+              case .hostState(let returned) = hostMessages[0],
+              case .configure(let requested) = configMessages[0],
+              returned == state, requested == settings else {
+            say("  FAIL: configuration did not round trip")
+            return false
+        }
+
+        let numeric = NetworkAddress.ipv4("127.0.0.1")
+        let named = NetworkAddress.ipv4("localhost")
+        guard numeric == "127.0.0.1", named == "127.0.0.1" else {
+            say("  FAIL: host name resolution")
+            return false
+        }
+
+        let normalized = SavedHost.normalizedAddress(" https://example.test/ ")
+        guard normalized == "example.test" else {
+            say("  FAIL: saved host address normalization")
+            return false
+        }
+        say("  configuration: protocol, host state and address resolution ok")
+        return true
     }
 
     // MARK: - render

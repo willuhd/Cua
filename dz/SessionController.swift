@@ -24,16 +24,34 @@ final class SessionController: NSObject {
     private var client: ClientSession?
     private var window: NSWindow?
     private var windowIsClosing = false
+    private(set) var activeHostID: String?
+    private(set) var activeProfileName: String?
+    private(set) var hostState: HostSessionState?
 
     /// Called when a session starts or stops so the menubar can update.
     var onChange: (() -> Void)?
 
     var isRunning: Bool { role != nil }
 
+    var availableDisplays: [HostDisplay] { HostSession.availableDisplays() }
+
+    var sessionSettings: StreamSettings? {
+        if let client { return client.currentSettings }
+        if let host { return host.currentSettings }
+        return nil
+    }
+
     /// Everything the popover needs to render the Remote tab.
     var snapshot: [String: Any] {
         var out: [String: Any] = ["role": role?.rawValue ?? "idle", "status": status]
         if let lastError { out["error"] = lastError }
+        if let sessionSettings { out["settings"] = StreamProfile.json(sessionSettings) }
+        if let activeHostID { out["hostId"] = activeHostID }
+        if let activeProfileName { out["profileName"] = activeProfileName }
+        if let hostState {
+            out["hostState"] = hostState.json
+            out["configured"] = hostState.configured
+        }
         switch role {
         case .host:
             out["frames"] = host?.framesSent ?? 0
@@ -72,11 +90,18 @@ final class SessionController: NSObject {
 
     // MARK: - Host
 
-    func startHosting(settings: StreamSettings) {
+    func startHosting(settings: StreamSettings, displayID: CGDirectDisplayID = CGMainDisplayID()) {
         guard role == nil else { return }
         lastError = nil
+        hostState = nil
         do {
-            let session = try HostSession(settings: settings)
+            let session = try HostSession(settings: settings, displayID: displayID)
+            session.onStateChange = { [weak self] in
+                DispatchQueue.main.async {
+                    self?.hostState = session.state
+                    self?.onChange?()
+                }
+            }
             host = session
             role = .host
             onChange?()
@@ -97,9 +122,14 @@ final class SessionController: NSObject {
 
     // MARK: - Client
 
-    func connect(to address: String, settings: StreamSettings) {
+    func connect(to address: String, settings: StreamSettings,
+                 hostID: String? = nil, profileName: String? = nil) {
         guard role == nil else { return }
         lastError = nil
+        activeHostID = hostID
+        activeProfileName = profileName
+        hostState = nil
+        if let hostID { HostStore.shared.touch(hostID) }
         guard !address.trimmingCharacters(in: .whitespaces).isEmpty else {
             lastError = "Enter the other Mac's address first"
             onChange?()
@@ -107,6 +137,12 @@ final class SessionController: NSObject {
         }
         do {
             let session = try ClientSession(settings: settings, host: address)
+            session.onStateChange = { [weak self] in
+                DispatchQueue.main.async {
+                    self?.hostState = session.hostState
+                    self?.onChange?()
+                }
+            }
             client = session
             role = .client
             showWindow(for: session.view, size: NSSize(width: settings.width, height: settings.height))
@@ -115,6 +151,32 @@ final class SessionController: NSObject {
         } catch {
             present(error, title: "Could not connect")
         }
+    }
+
+    /// Applies a profile on the client. The host acknowledges the effective
+    /// settings through hostState; the selected saved host is updated here so
+    /// the next connection starts with the same profile.
+    func updateSettings(_ settings: StreamSettings) {
+        guard role == .client, let client else { return }
+        let clean = (try? settings.validated()) ?? settings
+        client.requestSettings(clean)
+        if let id = activeHostID, var saved = HostStore.shared.find(id) {
+            saved.settings = clean
+            if let name = activeProfileName { saved.profileName = name }
+            _ = HostStore.shared.update(saved)
+        }
+        onChange?()
+    }
+
+    func setProfileName(_ name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        activeProfileName = clean
+        if let id = activeHostID, var saved = HostStore.shared.find(id) {
+            saved.profileName = clean
+            _ = HostStore.shared.update(saved)
+        }
+        onChange?()
     }
 
     private func showWindow(for view: StreamView, size: NSSize) {
@@ -155,6 +217,9 @@ final class SessionController: NSObject {
         host = nil
         client = nil
         role = nil
+        activeHostID = nil
+        activeProfileName = nil
+        hostState = nil
         // orderOut on a window that is already closing starts a second
         // transition, so it is skipped in that case.
         if !windowIsClosing { window?.orderOut(nil) }

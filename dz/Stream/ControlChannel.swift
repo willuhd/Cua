@@ -52,7 +52,11 @@ final class ControlChannel {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
-        guard inet_pton(AF_INET, host, &addr.sin_addr) == 1 else {
+        guard let resolved = NetworkAddress.ipv4(host) else {
+            Darwin.close(fd)
+            throw ControlError.address(host)
+        }
+        guard inet_pton(AF_INET, resolved, &addr.sin_addr) == 1 else {
             Darwin.close(fd)
             throw ControlError.address(host)
         }
@@ -154,6 +158,10 @@ final class ControlChannel {
     func send(stats: SessionStats) -> Bool { enqueue(.stats(stats)) }
     @discardableResult
     func send(clipboard: ClipboardPayload) -> Bool { enqueue(.clipboard(clipboard)) }
+    @discardableResult
+    func send(configure: StreamSettings) -> Bool { enqueue(.configure(configure)) }
+    @discardableResult
+    func send(hostState: HostSessionState) -> Bool { enqueue(.hostState(hostState)) }
 
     private func enqueue(_ message: ControlMessage) -> Bool {
         guard let framed = ControlFraming.encode(message) else { return false }

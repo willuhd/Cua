@@ -28,13 +28,54 @@ struct SessionStats: Codable, Equatable {
     var timestampMicros: UInt64
 }
 
+/// A display the host can share. Width and height are the display's pixel
+/// dimensions, which are what the client uses to offer resolution scale factors.
+struct HostDisplay: Codable, Equatable {
+    var id: UInt32
+    var name: String
+    var width: Int
+    var height: Int
+    var scale: Double
+    var main: Bool
+}
+
+/// Everything the client needs to know about the host before it chooses a
+/// profile, followed by the settings that actually took effect.
+struct HostSessionState: Codable, Equatable {
+    var hostName: String
+    var displays: [HostDisplay]
+    var displayID: UInt32
+    var settings: StreamSettings
+    var configured: Bool
+    var error: String?
+}
+
+extension HostSessionState {
+    var json: [String: Any] {
+        var out: [String: Any] = [
+            "hostName": hostName,
+            "displayID": Int(displayID),
+            "configured": configured,
+            "settings": StreamProfile.json(settings),
+            "displays": displays.map {
+                ["id": Int($0.id), "name": $0.name, "width": $0.width,
+                 "height": $0.height, "scale": $0.scale, "main": $0.main] as [String: Any]
+            },
+        ]
+        if let error { out["error"] = error }
+        return out
+    }
+}
+
 enum ControlMessage: Codable {
     case input(InputEvent)
     case stats(SessionStats)
     case clipboard(ClipboardPayload)
+    case configure(StreamSettings)
+    case hostState(HostSessionState)
 
-    private enum CodingKeys: String, CodingKey { case kind, input, stats, clipboard }
-    private enum Kind: String, Codable { case input, stats, clipboard }
+    private enum CodingKeys: String, CodingKey { case kind, input, stats, clipboard, configure, hostState }
+    private enum Kind: String, Codable { case input, stats, clipboard, configure, hostState }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -42,6 +83,8 @@ enum ControlMessage: Codable {
         case .input: self = .input(try container.decode(InputEvent.self, forKey: .input))
         case .stats: self = .stats(try container.decode(SessionStats.self, forKey: .stats))
         case .clipboard: self = .clipboard(try container.decode(ClipboardPayload.self, forKey: .clipboard))
+        case .configure: self = .configure(try container.decode(StreamSettings.self, forKey: .configure))
+        case .hostState: self = .hostState(try container.decode(HostSessionState.self, forKey: .hostState))
         }
     }
 
@@ -57,6 +100,12 @@ enum ControlMessage: Codable {
         case .clipboard(let payload):
             try container.encode(Kind.clipboard, forKey: .kind)
             try container.encode(payload, forKey: .clipboard)
+        case .configure(let settings):
+            try container.encode(Kind.configure, forKey: .kind)
+            try container.encode(settings, forKey: .configure)
+        case .hostState(let state):
+            try container.encode(Kind.hostState, forKey: .kind)
+            try container.encode(state, forKey: .hostState)
         }
     }
 }
