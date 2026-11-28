@@ -184,8 +184,10 @@ extension SessionController: NSWindowDelegate {
         windowIsClosing = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if self.window === closing { self.window = nil }
+            // Metal objects go first, while the layer still exists.
+            (closing?.contentView as? StreamView)?.prepareForTeardown()
             if self.role == .client { self.stop() }
+            if self.window === closing { self.window = nil }
         }
     }
 }

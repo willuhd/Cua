@@ -65,6 +65,31 @@ final class StreamView: NSView {
         updateStatusLayer()
     }
 
+    /// Releases the Metal objects while the layer they belong to is still
+    /// alive.
+    ///
+    /// Tearing a CAMetalLayer down with a texture cache still holding images
+    /// from its device faults on close. Doing it in this order, on the main
+    /// thread, before the window goes away, is what keeps the process alive.
+    func prepareForTeardown() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.prepareForTeardown() }
+            return
+        }
+        stateLock.lock()
+        currentFrame = nil
+        framesSeen = 0
+        stateLock.unlock()
+
+        if let cache = textureCache {
+            CVMetalTextureCacheFlush(cache, 0)
+        }
+        textureCache = nil
+        pipeline = nil
+        statusLayer?.removeFromSuperlayer()
+        statusLayer = nil
+    }
+
     /// What to show before the first frame, so a viewer knows what stage it is
     /// at rather than staring at black.
     func setStatus(_ text: String) {
@@ -172,6 +197,7 @@ final class StreamView: NSView {
             DispatchQueue.main.async { [weak self] in self?.renderNow() }
             return
         }
+        guard pipeline != nil else { return }
         drawCount += 1
         setupIfNeeded()
         updateDrawableSize()
