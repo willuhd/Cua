@@ -13,6 +13,11 @@ import Foundation
 import CoreGraphics
 
 final class InputInjector {
+    /// Events posted from a null source are not treated as hardware by the
+    /// system hotkey machinery, so Command-Space and the Fn modifier did
+    /// nothing on the host. A HID system source is what makes a synthetic
+    /// event indistinguishable from the keyboard's own.
+    private let source = CGEventSource(stateID: .hidSystemState)
     /// Coordinates arrive normalised to the session area, 0...1.
     private var screenBounds: CGRect
 
@@ -64,33 +69,11 @@ final class InputInjector {
     /// the delta from where it currently is. Free mode is the opposite.
     private func destination(for event: InputEvent) -> CGPoint {
         guard event.dx != 0 || event.dy != 0 else { return point(event.x, event.y) }
-        let current = CGEvent(source: nil)?.location ?? .zero
+        let current = CGEvent(source: source)?.location ?? .zero
         var next = CGPoint(x: current.x + event.dx, y: current.y + event.dy)
         next.x = min(max(next.x, screenBounds.minX), screenBounds.maxX - 1)
         next.y = min(max(next.y, screenBounds.minY), screenBounds.maxY - 1)
         return next
-    }
-
-    /// A three finger swipe means a shortcut on macOS. There is no API to post
-    /// the gesture itself, so the shortcut that produces the same result is
-    /// posted instead. Which shortcut is the user's System Settings, so these
-    /// are the defaults rather than the truth.
-    private func injectGesture(_ event: InputEvent) {
-        // HIG keycodes: left 123, right 124, down 125, up 126.
-        var code: CGKeyCode?
-        if abs(event.dx) >= abs(event.dy) {
-            if event.dx < 0 { code = 124 } else if event.dx > 0 { code = 123 }
-        } else {
-            if event.dy > 0 { code = 126 } else if event.dy < 0 { code = 125 }
-        }
-        guard let code else { return }
-        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
-              let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { return }
-        for posted in [down, up] {
-            posted.flags = [.maskControl]
-            tag(posted)
-            posted.post(tap: .cghidEventTap)
-        }
     }
 
     /// Text goes by character and everything else by keycode.
@@ -118,7 +101,7 @@ final class InputInjector {
             postUnicode(event.characters!, keyDown: event.kind == .keyDown, event: event)
             return
         }
-        guard let cg = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(event.code),
+        guard let cg = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(event.code),
                                keyDown: event.kind != .keyUp) else { return }
         cg.flags = flags
         if event.isRepeat { cg.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
@@ -147,28 +130,35 @@ final class InputInjector {
         cg.post(tap: .cghidEventTap)
     }
 
-    /// A pinch becomes the zoom shortcut, because a magnification gesture
-    /// cannot be synthesised and this is what it means almost everywhere.
-    private var magnificationAccumulator: Double = 0
-    private var lastMagnifyStep = Date.distantPast
+    /// A pinch is posted as a pinch: a zoom gesture with a phase and a value.
+    /// The window server turns it into a magnify event for whatever is under
+    /// the cursor, which is the same event a real trackpad produces.
+    private var openZoomPhase: GestureInjection.Phase = .none
 
-    /// A pinch delivers a stream of small deltas, so steps are accumulated and
-    /// rate limited. Posting a shortcut per delta zooms far faster than a real
-    /// trackpad would.
     private func injectMagnify(_ event: InputEvent) {
-        guard event.magnification != 0 else { return }
-        magnificationAccumulator += event.magnification
-        guard abs(magnificationAccumulator) >= 0.15 else { return }
-        guard Date().timeIntervalSince(lastMagnifyStep) > 0.12 else { return }
-        let increase = magnificationAccumulator > 0
-        magnificationAccumulator = 0
-        lastMagnifyStep = Date()
-        let code: CGKeyCode = increase ? 24 : 27  // "=" and "-"
-        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
-              let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { return }
-        for posted in [down, up] {
-            posted.flags = [.maskCommand]
-            tag(posted)
+        let requested = GestureInjection.Phase(rawValue: event.phase) ?? .changed
+        if requested == .changed, openZoomPhase == .none {
+            postZoom(phase: .began, magnification: event.magnification)
+        }
+        if requested == .ended, openZoomPhase == .none { return }
+        postZoom(phase: requested, magnification: event.magnification)
+        if requested == .ended || requested == .cancelled { openZoomPhase = .none }
+    }
+
+    private func postZoom(phase: GestureInjection.Phase, magnification: Double) {
+        guard let event = GestureInjection.magnify(phase: phase,
+                                                   magnification: magnification,
+                                                   source: source,
+                                                   tag: tag) else { return }
+        if phase == .began { openZoomPhase = .began }
+        event.post(tap: .cghidEventTap)
+    }
+
+    /// A trackpad swipe becomes a navigation swipe, the gesture the system uses
+    /// for Spaces and history, rather than the shortcut that imitates it.
+    private func injectGesture(_ event: InputEvent) {
+        guard let direction = GestureInjection.direction(dx: event.dx, dy: event.dy) else { return }
+        for posted in GestureInjection.swipe(direction, source: source, tag: tag) {
             posted.post(tap: .cghidEventTap)
         }
     }
@@ -186,7 +176,7 @@ final class InputInjector {
     }
 
     private func postFlagsChanged(_ event: InputEvent, flags: CGEventFlags) {
-        guard let cg = CGEvent(source: nil) else { return }
+        guard let cg = CGEvent(source: source) else { return }
         cg.type = .flagsChanged
         cg.setIntegerValueField(.keyboardEventKeycode, value: Int64(event.code))
         cg.flags = flags
@@ -195,7 +185,7 @@ final class InputInjector {
     }
 
     private func postUnicode(_ text: String, keyDown: Bool, event: InputEvent) {
-        guard let cg = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: keyDown) else { return }
+        guard let cg = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown) else { return }
         cg.flags = CGEventFlags(rawValue: event.flags)
         if event.isRepeat { cg.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
         let units = Array(text.utf16)
