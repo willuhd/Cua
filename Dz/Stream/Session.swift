@@ -32,6 +32,11 @@ final class HostSession {
     /// from. Written on the accept thread, read on the encode thread.
     private var sender: VideoSender?
     private let senderLock = NSLock()
+    var isRunning: Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return running
+    }
+
     private func currentSender() -> VideoSender? {
         senderLock.lock(); defer { senderLock.unlock() }
         return sender
@@ -106,8 +111,22 @@ final class HostSession {
                 NSLog("dz: could not open the video path to %@: %@", peer, "\(error)")
             }
         }
-        controlQueue.async {
-            do { try channel.acceptAndRead() } catch { NSLog("dz: control channel ended: %@", "\(error)") }
+        // The listener stays open, so a client that quits and comes back gets
+        // a fresh connection instead of needing the host restarted.
+        controlQueue.async { [weak self] in
+            while let self, self.isRunning {
+                do {
+                    try channel.acceptAndRead()
+                } catch {
+                    if !self.isRunning { break }
+                    NSLog("dz: control accept failed: %@", String(describing: error))
+                    usleep(200_000)
+                    continue
+                }
+                // The client went away; the next one gets a new video path.
+                self.senderLock.lock(); self.sender = nil; self.senderLock.unlock()
+                NSLog("dz: client disconnected")
+            }
         }
 
         // Tell the client what this host is really doing, once a second.
@@ -248,6 +267,7 @@ final class ClientSession {
             _ = control?.send(clipboard: payload)
         }
         clipboard.start()
+        control.startReading()
     }
 
     func start() {

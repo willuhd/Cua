@@ -6,12 +6,11 @@
 //
 //  Video can lose datagrams: the reassembler drops a torn frame and the next
 //  one repairs it. Input cannot. A dropped key release leaves a key stuck down
-//  on the host, and a dropped mouse move leaves the pointer somewhere the user
-//  did not put it. So input gets its own ordered, length-prefixed channel.
+//  on the host, so input gets its own ordered, length-prefixed channel.
 //
-//  Reading and writing run on separate queues. Sending never blocks the caller,
-//  because the caller is AppKit delivering a key press: blocking there on a
-//  stalled TCP window would freeze the window with a modifier still held down.
+//  The listening socket and the connected socket are held separately. Closing
+//  the listener when a client connects, as this used to, means a host can
+//  accept exactly one client per launch and then has to be restarted.
 //
 
 import Foundation
@@ -33,21 +32,19 @@ enum ControlError: Error, CustomStringConvertible {
 }
 
 final class ControlChannel {
-    /// Everything arriving on the channel, delivered on the read queue.
     var onMessage: ((ControlMessage) -> Void)?
-    /// Host side: called once a client connects, with the address its video
-    /// should be sent to. The host learns the peer rather than being told.
+    /// Host side: called with the address a freshly connected client should
+    /// receive video at.
     var onConnected: ((String) -> Void)?
 
-    private var fd: Int32 = -1
+    private var listenFd: Int32 = -1
+    private var connFd: Int32 = -1
     private let lock = NSLock()
-    private let readQueue = DispatchQueue(label: "dz.control.read", qos: .userInteractive)
     private let writeQueue = DispatchQueue(label: "dz.control.write", qos: .userInteractive)
     private var buffer = Data()
 
-    /// Client side: connects to a host.
     init(host: String, port: UInt16) throws {
-        fd = socket(AF_INET, SOCK_STREAM, 0)
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { throw ControlError.socket(errno) }
         var one: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
@@ -56,7 +53,7 @@ final class ControlChannel {
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
         guard inet_pton(AF_INET, host, &addr.sin_addr) == 1 else {
-            Darwin.close(fd); fd = -1
+            Darwin.close(fd)
             throw ControlError.address(host)
         }
         let ok = withUnsafePointer(to: &addr) { ptr in
@@ -65,50 +62,58 @@ final class ControlChannel {
             }
         }
         guard ok == 0 else {
-            let e = errno; Darwin.close(fd); fd = -1
+            let e = errno; Darwin.close(fd)
             throw ControlError.connect(e)
         }
-        var nodelay: Int32 = 1
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, socklen_t(MemoryLayout<Int32>.size))
-        boundWrite()
+        connFd = fd
+        setNoDelay(fd)
     }
 
-    /// Host side: binds and waits.
+    private init() {}
+
+    /// Host side: binds and listens. The listener stays open for the life of
+    /// the session so a client can drop and reconnect.
     static func listen(port: UInt16) throws -> ControlChannel {
-        let channel = try ControlChannel()
+        let channel = ControlChannel()
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw ControlError.socket(errno) }
         var one: Int32 = 1
-        setsockopt(channel.fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
         addr.sin_addr.s_addr = INADDR_ANY
         let ok = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.bind(channel.fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+                Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        guard ok == 0 else { throw ControlError.bind(errno) }
-        guard Darwin.listen(channel.fd, 1) == 0 else { throw ControlError.bind(errno) }
+        guard ok == 0 else { Darwin.close(fd); throw ControlError.bind(errno) }
+        guard Darwin.listen(fd, 4) == 0 else { Darwin.close(fd); throw ControlError.bind(errno) }
+        channel.listenFd = fd
         return channel
     }
 
-    private init() {
-        fd = socket(AF_INET, SOCK_STREAM, 0)
-    }
-
-    /// A stalled peer must not hold the write queue forever.
-    private func boundWrite() {
+    private func setNoDelay(_ fd: Int32) {
+        var nodelay: Int32 = 1
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, socklen_t(MemoryLayout<Int32>.size))
         var tv = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
     }
 
-    /// Accepts one client then reads from it. Blocks, so call it off the main
-    /// thread.
+    /// Accepts the next client and reads from it until it goes away. Blocks, so
+    /// call it from a worker queue; returns so the caller can accept again.
     func acceptAndRead() throws {
+        lock.lock()
+        let listener = listenFd
+        lock.unlock()
+        guard listener >= 0 else { throw ControlError.socket(EBADF) }
+
         var caddr = sockaddr_in()
         var len = socklen_t(MemoryLayout<sockaddr_in>.size)
         let client = withUnsafeMutablePointer(to: &caddr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(fd, $0, &len) }
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(listener, $0, &len) }
         }
         guard client >= 0 else { throw ControlError.socket(errno) }
 
@@ -118,13 +123,29 @@ final class ControlChannel {
         }
         var one: Int32 = 1
         setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        setNoDelay(client)
 
         lock.lock()
-        Darwin.close(fd)
-        fd = client
-        boundWrite()
+        connFd = client
+        buffer.removeAll()
         lock.unlock()
-        readLoop()
+
+        readLoop(client)
+
+        lock.lock()
+        if connFd == client { connFd = -1 }
+        lock.unlock()
+        Darwin.close(client)
+    }
+
+    /// Client side: reads in the background.
+    func startReading() {
+        DispatchQueue(label: "dz.control.read", qos: .userInteractive).async { [weak self] in
+            guard let self else { return }
+            let fd = self.connFd
+            guard fd >= 0 else { return }
+            self.readLoop(fd)
+        }
     }
 
     @discardableResult
@@ -144,11 +165,11 @@ final class ControlChannel {
         let bytes = [UInt8](framed)
         lock.lock()
         defer { lock.unlock() }
-        guard fd >= 0 else { return }
+        guard connFd >= 0 else { return }
         var sent = 0
         while sent < bytes.count {
             let n = bytes.withUnsafeBufferPointer { ptr in
-                Darwin.send(fd, ptr.baseAddress! + sent, bytes.count - sent, 0)
+                Darwin.send(connFd, ptr.baseAddress! + sent, bytes.count - sent, 0)
             }
             if n > 0 { sent += n; continue }
             if n < 0 && errno == EINTR { continue }
@@ -156,35 +177,32 @@ final class ControlChannel {
         }
     }
 
-    private func readLoop() {
+    private func readLoop(_ fd: Int32) {
         var chunk = [UInt8](repeating: 0, count: 16 * 1024)
         while true {
-            lock.lock()
-            let current = fd
-            lock.unlock()
-            guard current >= 0 else { break }
-
-            let n = recv(current, &chunk, chunk.count, 0)
+            let n = recv(fd, &chunk, chunk.count, 0)
             if n > 0 {
+                lock.lock()
                 buffer.append(contentsOf: chunk[0..<n])
                 var corrupted = false
                 let messages = ControlFraming.drain(&buffer, corrupted: &corrupted)
+                lock.unlock()
                 for message in messages { onMessage?(message) }
                 if corrupted {
-                    NSLog("dz: control stream is corrupt; closing the channel")
-                    break
+                    NSLog("dz: control stream is corrupt; dropping the client")
+                    return
                 }
                 continue
             }
             if n < 0 && errno == EINTR { continue }
-            break
+            return
         }
-        close()
     }
 
     func close() {
         lock.lock()
-        if fd >= 0 { shutdown(fd, SHUT_RDWR); Darwin.close(fd); fd = -1 }
+        if connFd >= 0 { shutdown(connFd, SHUT_RDWR); Darwin.close(connFd); connFd = -1 }
+        if listenFd >= 0 { shutdown(listenFd, SHUT_RDWR); Darwin.close(listenFd); listenFd = -1 }
         lock.unlock()
     }
 

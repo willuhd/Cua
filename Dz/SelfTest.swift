@@ -207,46 +207,67 @@ enum SelfTest {
 
     // MARK: - control channel
 
+    /// Two clients in turn on one listener, and a message back from the host.
+    /// The host used to close its listening socket when a client connected, so
+    /// a second connection was impossible without restarting the session.
     private static func controlTest() -> Bool {
         let port: UInt16 = 47_198
         do {
             let host = try ControlChannel.listen(port: port)
-            let ready = DispatchSemaphore(value: 0)
-            var receivedInput = false
-            var receivedStats = false
+            var seen: [Int] = []
+            var accepts = 0
             host.onMessage = { message in
-                switch message {
-                case .input(let event): receivedInput = event.code == 42 && event.kind == .keyDown
-                case .stats(let stats): receivedStats = stats.targetFps == 75
-                case .clipboard: break
-                }
+                if case .input(let event) = message { seen.append(Int(event.code)) }
             }
+            let finished = DispatchSemaphore(value: 0)
             DispatchQueue.global().async {
-                ready.signal()
-                try? host.acceptAndRead()
+                while accepts < 2 {
+                    guard (try? host.acceptAndRead()) != nil else { break }
+                    accepts += 1
+                }
+                finished.signal()
             }
-            ready.wait()
             Thread.sleep(forTimeInterval: 0.2)
 
-            let client = try ControlChannel(host: "127.0.0.1", port: port)
-            var event = InputEvent(kind: .keyDown)
-            event.code = 42
-            _ = client.send(event)
+            let first = try ControlChannel(host: "127.0.0.1", port: port)
+            var one = InputEvent(kind: .keyDown)
+            one.code = 42
+            _ = first.send(one)
+            Thread.sleep(forTimeInterval: 0.3)
+            first.close()
+            Thread.sleep(forTimeInterval: 0.3)
+
+            let second = try ControlChannel(host: "127.0.0.1", port: port)
+            var two = InputEvent(kind: .keyDown)
+            two.code = 43
+            _ = second.send(two)
+            Thread.sleep(forTimeInterval: 0.3)
+
+            var gotStats = false
+            let statsArrived = DispatchSemaphore(value: 0)
+            second.onMessage = { message in
+                if case .stats = message { gotStats = true; statsArrived.signal() }
+            }
+            second.startReading()
             var stats = SessionStats(role: "host", fps: 60, framesSent: 1, packetsSent: 2,
                                      bytesSent: 3, framesSkipped: 0, targetFps: 75, timestampMicros: 0)
             stats.targetFps = 75
-            _ = client.send(stats: stats)
+            _ = host.send(stats: stats)
+            _ = statsArrived.wait(timeout: .now() + 2)
 
-            var waited = 0.0
-            while waited < 2.0 && !(receivedInput && receivedStats) {
-                Thread.sleep(forTimeInterval: 0.05)
-                waited += 0.05
-            }
-            client.close()
+            second.close()
             host.close()
-            say("  control: input " + (receivedInput ? "ok" : "MISSING")
-                + ", stats " + (receivedStats ? "ok" : "MISSING"))
-            return receivedInput && receivedStats
+            _ = finished.wait(timeout: .now() + 1)
+
+            let events = String(describing: seen)
+            let reconnects = String(accepts)
+            let statsState = gotStats ? "ok" : "MISSING"
+            say("  control: events " + events + ", reconnects " + reconnects + ", stats " + statsState)
+            guard seen == [42, 43], accepts == 2, gotStats else {
+                say("  FAIL: control channel did not survive a reconnect")
+                return false
+            }
+            return true
         } catch {
             say("  FAIL: control channel: " + String(describing: error))
             return false
@@ -255,8 +276,8 @@ enum SelfTest {
 
     // MARK: - capture
 
-    /// Whether screen capture can run at all on this machine, and what it does
-    /// when it tries. Exit 0 captured frames, 2 no permission, 1 error.
+    /// Whether screen capture can run at all on this machine. Exit 0 captured
+    /// frames, 2 no Screen Recording grant, 1 a real failure.
     static func captureCheck() -> Int32 {
         say("capture check")
         let trusted = CGPreflightScreenCaptureAccess()
@@ -277,7 +298,9 @@ enum SelfTest {
         source.onFrame = { buffer in
             frames += 1
             if frames == 1 {
-                firstSize = String(CVPixelBufferGetWidth(buffer)) + "x" + String(CVPixelBufferGetHeight(buffer))
+                let w = CVPixelBufferGetWidth(buffer)
+                let h = CVPixelBufferGetHeight(buffer)
+                firstSize = String(w) + "x" + String(h)
             }
             got.signal()
         }
@@ -285,7 +308,9 @@ enum SelfTest {
 
         let started = DispatchSemaphore(value: 0)
         Task {
-            do { try await source.start() } catch {
+            do {
+                try await source.start()
+            } catch {
                 say("  start failed: " + String(describing: error))
                 started.signal()
                 return
@@ -299,7 +324,8 @@ enum SelfTest {
             captured += 1
         }
         source.stop()
-        say("  captured " + String(captured) + " frames, first " + (firstSize.isEmpty ? "none" : firstSize))
+        let sizeText = firstSize.isEmpty ? "none" : firstSize
+        say("  captured " + String(captured) + " frames, first " + sizeText)
         return captured > 0 ? 0 : 1
     }
 

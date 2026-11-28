@@ -32,7 +32,15 @@ final class StreamView: NSView {
         queue = device?.makeCommandQueue()
         super.init(frame: frame)
         wantsLayer = true
-        guard let device, let metalLayer = layer as? CAMetalLayer else { return }
+    }
+
+    /// Everything Metal is built here rather than in init.
+    ///
+    /// A view outside a window has no backing layer yet, so configuring in
+    /// init silently did nothing: no pipeline, no texture cache, no drawable,
+    /// and a window that stayed blank while input on the same view worked.
+    private func setupIfNeeded() {
+        guard pipeline == nil, let device, let metalLayer = layer as? CAMetalLayer else { return }
         metalLayer.device = device
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = true
@@ -40,10 +48,7 @@ final class StreamView: NSView {
         metalLayer.allowsNextDrawableTimeout = false
         CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
         buildPipeline(device: device, pixelFormat: metalLayer.pixelFormat)
-        updateDrawableSize()
 
-        // A status line over the video. A blank window is otherwise impossible
-        // to tell apart from a window that is working and waiting.
         let text = CATextLayer()
         text.fontSize = 13
         text.alignmentMode = .center
@@ -51,6 +56,9 @@ final class StreamView: NSView {
         text.contentsScale = 2
         metalLayer.addSublayer(text)
         statusLayer = text
+
+        updateDrawableSize()
+        updateStatusLayer()
     }
 
     /// What to show before the first frame, so a viewer knows what stage it is
@@ -149,6 +157,7 @@ final class StreamView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        setupIfNeeded()
         updateDrawableSize()
         guard let device, let queue, let pipeline, let textureCache,
               let metalLayer = layer as? CAMetalLayer,
@@ -202,6 +211,7 @@ final class StreamView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         window?.makeFirstResponder(self)
+        setupIfNeeded()
         updateDrawableSize()
         needsDisplay = true
         if trackingAreas.isEmpty {

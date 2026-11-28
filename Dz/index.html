@@ -299,7 +299,10 @@ function renderRemote(s){
     if (sess.bytes) stats.push(['Sent', (sess.bytes / 1048576).toFixed(1) + ' MB']);
     for (const [k,v] of stats) {
       const d = el('div','stat');
-      d.append(el('span','',k), el('span','',v));
+      const key = 'stat-' + k.toLowerCase().replace(/[^a-z]/g, '');
+      const value = el('span','',v);
+      value.id = key;
+      d.append(el('span','',k), value);
       P.append(d);
     }
     const stop = el('button',null,'Stop Session'); stop.type = 'button';
@@ -446,6 +449,30 @@ function render(s){
   if (tab === 'settings') renderSettings(s);
   postHeight();
 }
+// The counters move on their own, so they are refreshed in place. Nothing is
+// rebuilt and no height is posted, which is why the popover stays still.
+function updateStats(s){
+  const sess = s.session || {role:'idle'};
+  if (sess.role === 'idle') return;
+  const put = (id, text) => { const n = document.getElementById(id); if (n) n.textContent = text; };
+  put('stat-encoderate', (Math.round((sess.fps || 0) * 10) / 10) + ' fps');
+  put('stat-frames', String(sess.frames || 0));
+  put('stat-packets', String(sess.packets || 0));
+  put('stat-skipped', String(sess.skipped || 0));
+  put('stat-dropped', String(sess.dropped || 0));
+  if (sess.bytes) put('stat-sent', (sess.bytes / 1048576).toFixed(1) + ' MB');
+}
+setInterval(async () => {
+  if (document.hidden || !state) return;
+  const sess = state.session || {role:'idle'};
+  if (sess.role === 'idle') return;
+  try {
+    const fresh = await (await fetch('/api/state', {cache:'no-store'})).json();
+    state = fresh;
+    updateStats(fresh);
+  } catch (e) {}
+}, 1000);
+
 function isTyping(){
   const a = document.activeElement;
   return !!a && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA');

@@ -48,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         MCPServer.shared.onStateChange = refreshUI
         ForegroundCoordinator.shared.onChange = refreshUI
+        // Starting or stopping a session changes what the popover shows, and
+        // nothing was pushing that.
+        SessionController.shared.onChange = refreshUI
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification,
             object: nil, queue: .main
