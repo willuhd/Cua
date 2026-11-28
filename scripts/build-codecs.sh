@@ -1,31 +1,27 @@
 #!/bin/bash
 #
-# Builds the two codec libraries dz links, into .agents/tools.
+# Builds the two codec libraries dz links, as universal binaries.
 #
-# Everything lands under .agents/tools so nothing is installed system-wide and a
-# clean checkout reproduces the same build. Results are universal by default:
-# the Intel client is half the product, so an arm64-only library is a build that
-# runs on one machine and not the other.
+# This script installs nothing. It needs cmake, ninja, meson, nasm and curl on
+# PATH and says so plainly when one is missing, because which package manager
+# provides them is a property of the machine, not of this repository.
 #
 #   ./scripts/build-codecs.sh            # universal (arm64 + x86_64)
 #   ./scripts/build-codecs.sh --native   # just this machine, much faster
 #   ./scripts/build-codecs.sh --force    # rebuild everything
 #
-# Tooling, none of it required in advance except cmake:
-#   ninja  - release binary
-#   meson  - Python module, installed with pip --target
-#   nasm   - needed for the x86_64 slice's assembly
+# Sources are fetched into .agents/tools, which is ignored by git. If fetching
+# from GitHub directly does not work, point DZ_MIRROR at a prefix:
+#   DZ_MIRROR=https://gh-proxy.com/ ./scripts/build-codecs.sh
 
-set -euo pipefail
+set -eo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 T="$ROOT/.agents/tools"
-PROXY="https://gh-proxy.com"
+MIRROR="$DZ_MIRROR"
 
 DAV1D_VER="1.5.1"
 SVT_VER="3.1.2"
-NINJA_VER="1.13.1"
-NASM_VER="2.16.03"
 
 FORCE=0
 UNIVERSAL=1
@@ -37,41 +33,32 @@ for arg in "$@"; do
   esac
 done
 
-mkdir -p "$T"
-cd "$T"
-
 note() { echo "  $*"; }
 
-if [ "$FORCE" = 1 ] || [ ! -x ./ninja ]; then
-  note "fetching ninja $NINJA_VER"
-  curl -sSL -o ninja.zip "$PROXY/https://github.com/ninja-build/ninja/releases/download/v$NINJA_VER/ninja-mac.zip"
-  unzip -oq ninja.zip && rm ninja.zip && chmod +x ninja
+missing=""
+for tool in cmake ninja meson curl tar; do
+  command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+done
+if [ "$UNIVERSAL" = 1 ] && ! command -v nasm >/dev/null 2>&1; then
+  missing="$missing nasm"
 fi
-export PATH="$T:$PATH"
+if [ -n "$missing" ]; then
+  echo "error: missing build tools:$missing" >&2
+  echo >&2
+  echo "Install them however this machine does that. On macOS with Homebrew:" >&2
+  echo "  brew install cmake ninja meson nasm" >&2
+  exit 1
+fi
 
-if [ "$FORCE" = 1 ] || ! PYTHONPATH="$T/pylib" python3 -c 'import mesonbuild' 2>/dev/null; then
-  note "installing meson into .agents/tools/pylib"
-  python3 -m pip install --quiet --target "$T/pylib" meson
-fi
-meson() { PYTHONPATH="$T/pylib" python3 -m mesonbuild.mesonmain "$@"; }
-export PYTHONPATH="$T/pylib"
-
-if [ "$UNIVERSAL" = 1 ]; then
-  if [ "$FORCE" = 1 ] || [ ! -x ./nasm ]; then
-    note "fetching nasm $NASM_VER for the x86_64 slice"
-    curl -sSL -o nasm.zip "https://www.nasm.us/pub/nasm/releasebuilds/$NASM_VER/macosx/nasm-$NASM_VER-macosx.zip"
-    unzip -oq nasm.zip && rm nasm.zip
-    found="$(find . -maxdepth 2 -name nasm -type f | head -1)"
-    cp "$found" ./nasm && chmod +x ./nasm
-  fi
-fi
+mkdir -p "$T"
+cd "$T"
 
 build_dav1d_slice() {
   arch="$1"
   ( cd "dav1d-$DAV1D_VER"
     rm -rf "build-$arch"
     if [ "$arch" = "x86_64" ]; then
-      # meson cannot take two -arch flags on one invocation, so the second
+      # meson cannot take two -arch flags in one invocation, so the second
       # slice is described by a cross file instead.
       cat > cross-x86_64.txt <<'CROSS'
 [binaries]
@@ -86,27 +73,30 @@ cpu_family = 'x86_64'
 cpu = 'x86_64'
 endian = 'little'
 CROSS
-      CC=clang meson setup "build-$arch" --buildtype=release         --cross-file cross-x86_64.txt         -Denable_tests=false -Denable_tools=false -Dbitdepths=8 >/dev/null
+      CC=clang meson setup "build-$arch" --buildtype=release \
+        --cross-file cross-x86_64.txt \
+        -Denable_tests=false -Denable_tools=false -Dbitdepths=8 >/dev/null
     else
-      CC=clang meson setup "build-$arch" --buildtype=release         -Denable_tests=false -Denable_tools=false -Dbitdepths=8 >/dev/null
+      CC=clang meson setup "build-$arch" --buildtype=release \
+        -Denable_tests=false -Denable_tools=false -Dbitdepths=8 >/dev/null
     fi
     ninja -C "build-$arch" >/dev/null )
 }
 
 if [ "$FORCE" = 1 ] || [ ! -f "dav1d-$DAV1D_VER/build/src/libdav1d.dylib" ]; then
   note "building dav1d $DAV1D_VER"
-  [ -d "dav1d-$DAV1D_VER" ] || {
-    curl -sSL -o dav1d.tar.gz "$PROXY/https://github.com/videolan/dav1d/archive/refs/tags/$DAV1D_VER.tar.gz"
+  if [ ! -d "dav1d-$DAV1D_VER" ]; then
+    curl -sSL -o dav1d.tar.gz "$MIRROR""https://github.com/videolan/dav1d/archive/refs/tags/$DAV1D_VER.tar.gz"
     tar xzf dav1d.tar.gz && rm dav1d.tar.gz
-  }
-  # Build the slices first and only replace the installed library once they
-  # have both succeeded. A failed slice must not take the working one with it.
+  fi
+  # Slices are built before the installed library is replaced, so a failed
+  # slice cannot take a working one with it.
   rm -rf "dav1d-$DAV1D_VER/build-arm64" "dav1d-$DAV1D_VER/build-x86_64"
   if [ "$UNIVERSAL" = 1 ]; then
-    for arch in arm64 x86_64; do
-      note "  dav1d slice: $arch"
-      build_dav1d_slice "$arch"
-    done
+    note "  arm64"
+    build_dav1d_slice arm64
+    note "  x86_64"
+    build_dav1d_slice x86_64
     mkdir -p "dav1d-$DAV1D_VER/build/src"
     lipo -create "dav1d-$DAV1D_VER/build-arm64/src/libdav1d.7.dylib" \
                  "dav1d-$DAV1D_VER/build-x86_64/src/libdav1d.7.dylib" \
@@ -125,18 +115,18 @@ fi
 
 if [ "$FORCE" = 1 ] || [ ! -f "SVT-AV1-$SVT_VER/Bin/Release/libSvtAv1Enc.3.dylib" ]; then
   note "building SVT-AV1 $SVT_VER"
-  [ -d "SVT-AV1-$SVT_VER" ] || {
-    curl -sSL -o svt.tar.gz "$PROXY/https://github.com/AOMediaCodec/SVT-AV1/archive/refs/tags/v$SVT_VER.tar.gz"
+  if [ ! -d "SVT-AV1-$SVT_VER" ]; then
+    curl -sSL -o svt.tar.gz "$MIRROR""https://github.com/AOMediaCodec/SVT-AV1/archive/refs/tags/v$SVT_VER.tar.gz"
     tar xzf svt.tar.gz && rm svt.tar.gz
-  }
+  fi
   archs="arm64"
   [ "$UNIVERSAL" = 1 ] && archs="arm64;x86_64"
   ( cd "SVT-AV1-$SVT_VER"
     rm -rf build
-    PATH="$T:$PATH" cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_SHARED_LIBS=ON -DBUILD_APPS=OFF -DENABLE_AVX512=OFF \
       -DCMAKE_OSX_ARCHITECTURES="$archs" >/dev/null
-    PATH="$T:$PATH" ninja -C build >/dev/null )
+    ninja -C build >/dev/null )
 fi
 
 echo

@@ -60,9 +60,9 @@ jobs:
         run: |
           set -euo pipefail
           # dav1d and SVT-AV1 are linked into the app, so they have to exist
-          # before the target builds. The script fetches its own ninja, meson
-          # and nasm; only cmake is expected to be present.
-          command -v cmake >/dev/null || brew install cmake
+          # before the target builds. The script installs nothing itself; the
+          # runner provides its own tools.
+          brew install cmake ninja meson nasm
           ./scripts/build-codecs.sh
           # The app is built for both architectures, so a single-slice library
           # has to fail here rather than at link time.
