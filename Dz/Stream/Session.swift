@@ -28,8 +28,14 @@ final class HostSession {
     private let source: ScreenSource
     private let converter: I420Converter
     private let encoder: AV1Encoder
-    /// Created once a client connects, pointed at whatever address it came from.
+    /// Created once a client connects, pointed at whatever address it came
+    /// from. Written on the accept thread, read on the encode thread.
     private var sender: VideoSender?
+    private let senderLock = NSLock()
+    private func currentSender() -> VideoSender? {
+        senderLock.lock(); defer { senderLock.unlock() }
+        return sender
+    }
     private let injector: InputInjector
 
     private var control: ControlChannel?
@@ -93,7 +99,8 @@ final class HostSession {
         channel.onConnected = { [weak self] peer in
             guard let self else { return }
             do {
-                self.sender = try VideoSender(host: peer, port: self.videoPort)
+                let created = try VideoSender(host: peer, port: self.videoPort)
+                self.senderLock.lock(); self.sender = created; self.senderLock.unlock()
                 NSLog("dz: client connected from %@", peer)
             } catch {
                 NSLog("dz: could not open the video path to %@: %@", peer, "\(error)")
@@ -136,7 +143,7 @@ final class HostSession {
     }
 
     private func pipeline(_ buffer: CVPixelBuffer) {
-        guard sender != nil else { return }
+        guard currentSender() != nil else { return }
         let nowMicros = DispatchTime.now().uptimeNanoseconds / 1000
         let interval = UInt64(1_000_000 / max(1, settings.frameRate))
         if lastEncodeMicros != 0, nowMicros &- lastEncodeMicros < interval {
@@ -160,7 +167,7 @@ final class HostSession {
                                                                          keyframe: keyframe,
                                                                          mtu: VideoPacket.defaultMTU,
                                                                          parityOverhead: settings.fecOverhead)
-                sender?.send(fragments)
+                currentSender()?.send(fragments)
                 let sentBytes = fragments.reduce(0) { $0 + $1.payload.count + VideoPacket.headerSize }
                 stateLock.lock()
                 packetsSent += fragments.count
@@ -206,6 +213,7 @@ final class ClientSession {
 
     private(set) var framesShown = 0
     private(set) var framesDropped = 0
+    private(set) var packetsReceived = 0
     /// What the host says it is encoding, so the two ends can be compared.
     private(set) var hostStats: SessionStats?
 
@@ -252,7 +260,12 @@ final class ClientSession {
             self.stateLock.lock(); let shown = self.framesShown; let alive = self.running
             self.stateLock.unlock()
             if alive && shown == 0 {
-                self.view.setStatus("Connected, no frames yet. Is the other Mac sharing?")
+                self.stateLock.lock(); let packets = self.packetsReceived; self.stateLock.unlock()
+                if packets == 0 {
+                    self.view.setStatus("No video arriving. Is the other Mac sharing, and is UDP 47900 open?")
+                } else {
+                    self.view.setStatus("Video arriving (" + String(packets) + " packets) but nothing decoded.")
+                }
             }
         }
         receiveQueue.async { [weak self] in
@@ -266,10 +279,12 @@ final class ClientSession {
             stateLock.lock(); let alive = running; stateLock.unlock()
             guard alive else { break }
             guard let packet = receiver.receive(timeout: 0.2) else {
+                _ = 0
                 // Nothing arriving is exactly when stale frames pile up.
                 assembler.expireStale()
                 continue
             }
+            stateLock.lock(); packetsReceived += 1; stateLock.unlock()
             guard let whole = assembler.ingest(packet) else { continue }
             do {
                 guard let frame = try decoder.decode(whole) else { continue }
