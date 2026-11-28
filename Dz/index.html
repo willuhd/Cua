@@ -463,8 +463,8 @@ async function refresh(force){
   const sig = signature(s);
   if (sig !== lastSig) {
     lastSig = sig;
-    if (isTyping()) renderRemoteStatsOnly(s);
-    else render(s);
+    // Never rebuild a panel underneath someone who is typing in it.
+    if (!isTyping()) render(s);
   }
   else postHeight();
   if (pendingRefresh) { pendingRefresh = false; refresh(); }
@@ -799,8 +799,8 @@ async function refresh(force){
   const sig = signature(s);
   if (sig !== lastSig) {
     lastSig = sig;
-    if (isTyping()) renderRemoteStatsOnly(s);
-    else render(s);
+    // Never rebuild a panel underneath someone who is typing in it.
+    if (!isTyping()) render(s);
   }
   else postHeight();
   if (pendingRefresh) { pendingRefresh = false; refresh(); }
@@ -810,27 +810,6 @@ function isTyping(){
   const a = document.activeElement;
   return !!a && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA');
 }
-setInterval(() => {
-  if (document.hidden || !state || isTyping()) return;
-  if (tab === 'agents') render(state);
-  else if (tab === 'remote') renderRemoteStatsOnly(state);
-}, 2000);
-
-// Only the live numbers move, so the rest of the panel is left alone.
-function renderRemoteStatsOnly(s){
-  const P = $('panel-remote');
-  const sess = s.session || {role:'idle'};
-  if (sess.role === 'idle') return;
-  for (const node of P.querySelectorAll('.stat')) {
-    const label = node.firstChild ? node.firstChild.textContent : '';
-    const value = node.lastChild;
-    if (!value) continue;
-    if (label === 'Encode rate') value.textContent = (Math.round((sess.fps || 0) * 10) / 10) + ' fps';
-    if (label === 'Frames') value.textContent = String(sess.frames || 0);
-    if (label === 'Packets') value.textContent = String(sess.packets || 0);
-  }
-}
-
 for (const b of document.querySelectorAll('.tabs [data-tab]')) {
   b.onclick = () => switchTab(b.dataset.tab);
 }
