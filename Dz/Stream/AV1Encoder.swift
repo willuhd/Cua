@@ -52,9 +52,14 @@ final class AV1Encoder {
                                       ? SVT_AV1_RC_MODE_CBR.rawValue
                                       : SVT_AV1_RC_MODE_VBR.rawValue)
         cfg.target_bit_rate = UInt32(self.settings.bitrate)
-        // Low delay: no lookahead, and CBR is refused without it. The library
-        // deprecated the P variant, so low delay means LOW_DELAY_B in 3.x.
-        cfg.pred_structure = UInt8(SVT_AV1_PRED_LOW_DELAY_B.rawValue)
+        // Low delay has no lookahead, which CBR requires and which a desktop
+        // stream wants anyway. VBR is refused in low delay by the library, so
+        // it takes the random access structure and the latency that implies.
+        // The P variant was deprecated in 3.x, so low delay means LOW_DELAY_B.
+        let lowDelay = self.settings.rateControl == .cbr
+        cfg.pred_structure = UInt8(lowDelay
+                                   ? SVT_AV1_PRED_LOW_DELAY_B.rawValue
+                                   : SVT_AV1_PRED_RANDOM_ACCESS.rawValue)
         // A keyframe every two seconds, so a client that joins late or drops
         // does not wait long to recover.
         cfg.intra_period_length = Int32(self.settings.frameRate * 2)

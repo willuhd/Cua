@@ -315,8 +315,13 @@ enum SelfTest {
         while Date() < until { RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
 
         say("  draws " + String(view.drawCount) + ", presents " + String(view.presentCount))
-        window.orderOut(nil)
-        window.contentView = nil
+
+        // Closing is the part that used to take the process down.
+        window.close()
+        let afterClose = Date().addingTimeInterval(0.6)
+        while Date() < afterClose { RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
+        say("  closed without crashing")
+
         return view.drawCount > 0 && view.presentCount > 0 ? 0 : 1
     }
 

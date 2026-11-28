@@ -102,6 +102,15 @@ final class InputInjector {
     /// backwards types the letter instead of firing the menu item.
     private func injectKey(_ event: InputEvent) {
         let flags = CGEventFlags(rawValue: event.flags)
+
+        // A modifier transition is a flagsChanged event carrying the new
+        // state. Posting it as a key press of the modifier's keycode tells the
+        // host nothing, which is why no modifier reached it before, Fn least
+        // of all: Fn exists only as a flag bit and has no other expression.
+        if event.kind == .flagsChanged {
+            postFlagsChanged(event, flags: flags)
+            return
+        }
         let shortcut = flags.contains(.maskCommand) || flags.contains(.maskControl)
             || flags.contains(.maskAlternate)
         let hasText = !(event.characters ?? "").isEmpty
@@ -140,9 +149,20 @@ final class InputInjector {
 
     /// A pinch becomes the zoom shortcut, because a magnification gesture
     /// cannot be synthesised and this is what it means almost everywhere.
+    private var magnificationAccumulator: Double = 0
+    private var lastMagnifyStep = Date.distantPast
+
+    /// A pinch delivers a stream of small deltas, so steps are accumulated and
+    /// rate limited. Posting a shortcut per delta zooms far faster than a real
+    /// trackpad would.
     private func injectMagnify(_ event: InputEvent) {
         guard event.magnification != 0 else { return }
-        let increase = event.magnification > 0
+        magnificationAccumulator += event.magnification
+        guard abs(magnificationAccumulator) >= 0.15 else { return }
+        guard Date().timeIntervalSince(lastMagnifyStep) > 0.12 else { return }
+        let increase = magnificationAccumulator > 0
+        magnificationAccumulator = 0
+        lastMagnifyStep = Date()
         let code: CGKeyCode = increase ? 24 : 27  // "=" and "-"
         guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
               let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { return }
@@ -161,6 +181,15 @@ final class InputInjector {
             cg.setIntegerValueField(.mouseEventDeltaX, value: Int64(event.dx))
             cg.setIntegerValueField(.mouseEventDeltaY, value: Int64(event.dy))
         }
+        tag(cg)
+        cg.post(tap: .cghidEventTap)
+    }
+
+    private func postFlagsChanged(_ event: InputEvent, flags: CGEventFlags) {
+        guard let cg = CGEvent(source: nil) else { return }
+        cg.type = .flagsChanged
+        cg.setIntegerValueField(.keyboardEventKeycode, value: Int64(event.code))
+        cg.flags = flags
         tag(cg)
         cg.post(tap: .cghidEventTap)
     }
