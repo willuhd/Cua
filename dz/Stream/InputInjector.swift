@@ -76,6 +76,13 @@ final class InputInjector {
         return next
     }
 
+    /// True for the private use range AppKit uses to describe keys that have
+    /// no character: arrows, function keys, and the navigation cluster.
+    private func isFunctionKey(_ text: String) -> Bool {
+        guard let scalar = text.unicodeScalars.first else { return false }
+        return (0xF700...0xF8FF).contains(scalar.value)
+    }
+
     /// Text goes by character and everything else by keycode.
     ///
     /// The character path is what makes the layout and any input method on the
@@ -96,9 +103,15 @@ final class InputInjector {
         }
         let shortcut = flags.contains(.maskCommand) || flags.contains(.maskControl)
             || flags.contains(.maskAlternate)
-        let hasText = !(event.characters ?? "").isEmpty
+        // Arrow keys, function keys, Home, End, Page Up and Down and Escape
+        // all report a character, but it is in the private use range
+        // U+F700...U+F8FF rather than text. Sending those down the character
+        // path posts a nonsense keycode and the host reacts to the wrong key,
+        // which is why arrows were moving the Dock selection instead.
+        let text = event.characters ?? ""
+        let hasText = !text.isEmpty && !isFunctionKey(text)
         if hasText, !shortcut, event.kind != .flagsChanged {
-            postUnicode(event.characters!, keyDown: event.kind == .keyDown, event: event)
+            postUnicode(text, keyDown: event.kind == .keyDown, event: event)
             return
         }
         guard let cg = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(event.code),

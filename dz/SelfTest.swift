@@ -29,6 +29,7 @@ enum SelfTest {
         if !controlTest() { failures += 1 }
         if !configurationTest() { failures += 1 }
         if !rateControlTest() { failures += 1 }
+        if !keyClassTest() { failures += 1 }
         if !renderTest() { failures += 1 }
 
         say(failures == 0 ? "PASS" : "FAIL: " + String(failures) + " check(s) failed")
@@ -465,6 +466,30 @@ enum SelfTest {
             say("  FAIL: VBR: " + String(describing: error))
             return false
         }
+    }
+
+    // MARK: - key classification
+
+    /// Arrow and function keys report a character in the private use range, so
+    /// anything deciding "is this text" has to know that. Getting it wrong is
+    /// what sent arrows down the character path and moved Dock selection.
+    private static func keyClassTest() -> Bool {
+        func functionKey(_ text: String) -> Bool {
+            guard let scalar = text.unicodeScalars.first else { return false }
+            return (0xF700...0xF8FF).contains(scalar.value)
+        }
+        let arrows = ["\u{F700}", "\u{F701}", "\u{F702}", "\u{F703}"]
+        let letters = ["a", "Z", "1", " "]
+        for arrow in arrows where !functionKey(arrow) {
+            say("  FAIL: " + arrow + " was not classified as a function key")
+            return false
+        }
+        for letter in letters where functionKey(letter) {
+            say("  FAIL: " + letter + " was classified as a function key")
+            return false
+        }
+        say("  keys: arrows and letters classified correctly")
+        return true
     }
 
     // MARK: - render
