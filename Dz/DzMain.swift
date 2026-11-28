@@ -21,7 +21,8 @@
 //   xcodebuild -project dz.xcodeproj -target dz -configuration Release build CODE_SIGNING_ALLOWED=NO
 //   XB=$(xcodebuild -project dz.xcodeproj -showBuildSettings | grep BUILT_PRODUCTS_DIR | awk '{print $3}')
 //   cp -R "$XB/Release/dz.app" dz.app
-//   codesign --force -s - --identifier com.willuhd.dz dz.app   (ad-hoc; keep id stable for TCC)
+//   find dz.app/Contents/Frameworks -name '*.dylib' -exec codesign --force --sign - {} \;
+//   codesign --force --sign - dz.app   (inside out, no --deep, no hardened runtime)
 // No ObjC: pure Swift. SkyLight arrives via dlopen, no bridging header.
 // Codesign adhoc; same bundle id com.willuhd.dz so the one TCC checkbox survives.
 

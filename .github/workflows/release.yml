@@ -105,7 +105,13 @@ jobs:
           echo "APP=$APP" >> "$GITHUB_ENV"
           echo "app bundle: $APP"
 
-          codesign --force --deep --options runtime --timestamp=none --sign - "$APP"
+          # Sign nested code first, then the bundle, and never with --deep.
+          # Hardened runtime is deliberately not used: it turns on library
+          # validation, which refuses to load an ad-hoc signed dylib from
+          # inside an ad-hoc signed app, which is exactly the layout we ship.
+          # With no Developer ID there is nothing for it to protect anyway.
+          find "$APP/Contents/Frameworks" -name '*.dylib' -exec codesign --force --timestamp=none --sign - {} \;
+          codesign --force --timestamp=none --sign - "$APP"
           codesign --verify --strict --verbose=2 "$APP"
 
           echo "--- signature ---"
