@@ -106,7 +106,7 @@ final class PopoverVC: NSViewController, WKNavigationDelegate, WKScriptMessageHa
             else if let d = message.body as? Double { raw = CGFloat(d) }
             else { return }
             // The web side owns the height; this only keeps it sane.
-            let h = max(140, min(640, raw))
+            let h = max(150, min(720, raw))
             guard abs(h - heightConstraint.constant) > 0.5 else { return }
             heightConstraint.constant = h
             preferredContentSize = NSSize(width: 360, height: h)

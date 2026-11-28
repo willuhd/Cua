@@ -540,11 +540,14 @@ final class MCPServer: NSObject {
             let missing = [ax ? nil : "Accessibility", scr ? nil : "Screen Recording"].compactMap { $0 }.joined(separator: " + ")
             let perms = (ax && scr) ? "Permissions OK (Accessibility + Screen Recording)." : "Missing: \(missing). Grant as dz.app via the button below."
             let profileSnapshot = StreamProfile.load()
+            let sessionSnapshot = DispatchQueue.main.sync { SessionController.shared.snapshot }
+            let displaySnapshot = DispatchQueue.main.sync { SessionController.shared.availableDisplays }
+            let shareSnapshot = DispatchQueue.main.sync { SessionController.shared.shareStatus }
             let payload: [String: Any] = ["version": dzVersion,
-                                          "session": SessionController.shared.snapshot,
+                                          "session": sessionSnapshot,
                                           "stream": StreamProfile.json(profileSnapshot),
                                           "hosts": HostStore.shared.json,
-                                          "displays": HostSession.availableDisplays().map {
+                                          "displays": displaySnapshot.map {
                                               ["id": Int($0.id), "name": $0.name, "width": $0.width,
                                                "height": $0.height, "scale": $0.scale, "main": $0.main] as [String: Any]
                                           },
@@ -553,7 +556,7 @@ final class MCPServer: NSObject {
                                           "appIcon": iconBase64Cached(pid: getpid()),
                                           "appPath": Bundle.main.bundleURL.path,
                                           "foreground": ForegroundCoordinator.shared.status(),
-                                          "share": SessionController.shared.shareStatus,
+                                          "share": shareSnapshot,
                                           "remote": ["expose": MCPServer.expose,
                                                      "token": MCPServer.remoteToken,
                                                      "address": MCPServer.sharedAddress() ?? ""]]
@@ -615,13 +618,15 @@ final class MCPServer: NSObject {
         if pathOnly == "/api/settings" && req.method == "POST" {
             guard isJSON else { send(fd, status: "415 Unsupported Media Type", body: Data("{\"error\":\"application/json required\"}".utf8)); return }
             let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
-            if SessionController.shared.role == .client {
-                let current = SessionController.shared.sessionSettings ?? StreamProfile.load()
+            let isClient = DispatchQueue.main.sync { SessionController.shared.role == .client }
+            if isClient {
+                let current = DispatchQueue.main.sync { SessionController.shared.sessionSettings ?? StreamProfile.load() }
                 let updated = StreamProfile.apply(obj, to: current)
-                if let name = obj["profileName"] as? String {
-                    SessionController.shared.setProfileName(name)
+                let name = obj["profileName"] as? String
+                DispatchQueue.main.async {
+                    if let name { SessionController.shared.setProfileName(name) }
+                    SessionController.shared.updateSettings(updated)
                 }
-                DispatchQueue.main.async { SessionController.shared.updateSettings(updated) }
                 let payload: [String: Any] = ["ok": true, "stream": StreamProfile.json(updated),
                                               "applied": true]
                 send(fd, status: "200 OK", body: jsonData(payload), extraHeaders: [:])

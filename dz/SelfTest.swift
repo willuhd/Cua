@@ -28,6 +28,7 @@ enum SelfTest {
         if !colourTest() { failures += 1 }
         if !controlTest() { failures += 1 }
         if !configurationTest() { failures += 1 }
+        if !rateControlTest() { failures += 1 }
         if !renderTest() { failures += 1 }
 
         say(failures == 0 ? "PASS" : "FAIL: " + String(failures) + " check(s) failed")
@@ -429,6 +430,41 @@ enum SelfTest {
         }
         say("  configuration: protocol, host state and address resolution ok")
         return true
+    }
+
+    // MARK: - rate control
+
+    private static func rateControlTest() -> Bool {
+        do {
+            var settings = StreamSettings()
+            settings.width = 320
+            settings.height = 240
+            settings.frameRate = 30
+            settings.bitrate = 1_000_000
+            settings.preset = 10
+            settings.rateControl = .vbr
+            settings = try settings.validated()
+            let encoder = try AV1Encoder(settings: settings)
+            let decoder = try AV1Decoder()
+            let w = settings.width, h = settings.height
+            let luma = w * h, chroma = (w / 2) * (h / 2)
+            var frame = [UInt8](repeating: 64, count: luma + chroma * 2)
+            var decoded = 0
+            for value in 0..<6 {
+                for i in 0..<luma { frame[i] = UInt8((value * 25 + i % 256) & 0xFF) }
+                for packet in try frame.withUnsafeMutableBytes({ try encoder.encode(i420: $0.baseAddress!) }) {
+                    if try decoder.decode(packet) != nil { decoded += 1 }
+                }
+            }
+            for packet in try encoder.finish() {
+                if try decoder.decode(packet) != nil { decoded += 1 }
+            }
+            say("  VBR: decoded " + String(decoded) + " frames")
+            return decoded > 0
+        } catch {
+            say("  FAIL: VBR: " + String(describing: error))
+            return false
+        }
     }
 
     // MARK: - render

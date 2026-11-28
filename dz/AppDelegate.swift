@@ -37,9 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = popVC
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = NSSize(width: 360, height: 360)
+        popover.contentSize = NSSize(width: 380, height: 360)
         popVC.onHeight = { [weak self] h in
-            self?.popover.contentSize = NSSize(width: 360, height: h)
+            self?.popover.contentSize = NSSize(width: 380, height: h)
         }
 
         // Permissions are prompted from the popover's grant button, never on launch.
