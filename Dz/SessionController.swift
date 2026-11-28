@@ -23,6 +23,7 @@ final class SessionController: NSObject {
     private var host: HostSession?
     private var client: ClientSession?
     private var window: NSWindow?
+    private var windowIsClosing = false
 
     /// Called when a session starts or stops so the menubar can update.
     var onChange: (() -> Void)?
@@ -121,6 +122,10 @@ final class SessionController: NSObject {
                               styleMask: [.titled, .closable, .resizable, .miniaturizable],
                               backing: .buffered, defer: false)
         window.title = "dz"
+        // AppKit animates a close with a transform animation whose teardown is
+        // what crashed: the window was freed while that animation was still
+        // being released. There is nothing to animate here anyway.
+        window.animationBehavior = .none
         window.contentView = view
         // The view takes focus for input; the window must not eat key events.
         window.makeFirstResponder(view)
@@ -150,7 +155,10 @@ final class SessionController: NSObject {
         host = nil
         client = nil
         role = nil
-        window?.orderOut(nil)
+        // orderOut on a window that is already closing starts a second
+        // transition, so it is skipped in that case.
+        if !windowIsClosing { window?.orderOut(nil) }
+        windowIsClosing = false
         window = nil
         onChange?()
     }
@@ -173,6 +181,7 @@ extension SessionController: NSWindowDelegate {
         // inside its own close notification frees it while AppKit is still
         // unwinding the close, which is what was taking the process down.
         let closing = notification.object as? NSWindow
+        windowIsClosing = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if self.window === closing { self.window = nil }

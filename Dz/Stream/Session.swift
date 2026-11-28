@@ -133,8 +133,12 @@ final class HostSession {
             }
         }
 
-        // Tell the client what this host is really doing, once a second.
-        let timer = DispatchSource.makeTimerSource(queue: controlQueue)
+        // Tell the client what this host is really doing, once a second. The
+        // timer needs its own queue: controlQueue is occupied by the blocking
+        // accept loop for as long as a client is connected, which starved this
+        // and left the reported rate at zero.
+        let statsQueue = DispatchQueue(label: "dz.stats", qos: .utility)
+        let timer = DispatchSource.makeTimerSource(queue: statsQueue)
         timer.schedule(deadline: .now() + 1, repeating: 1)
         timer.setEventHandler { [weak self] in
             guard let self, let channel = self.control else { return }

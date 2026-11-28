@@ -40,6 +40,9 @@ struct DzMain {
         if CommandLine.arguments.contains("--capture-check") {
             exit(SelfTest.captureCheck())
         }
+        if CommandLine.arguments.contains("--render-check") {
+            exit(SelfTest.renderWindowCheck())
+        }
         let app = NSApplication.shared
         let d = AppDelegate()
         app.delegate = d

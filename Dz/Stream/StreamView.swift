@@ -25,6 +25,10 @@ final class StreamView: NSView {
     private var statusText = "Waiting for frames..."
     private var statusLayer: CATextLayer?
     private var framesSeen = 0
+    /// Counts draw calls, so a headless check can tell whether AppKit ever
+    /// asked us to render.
+    private(set) var drawCount = 0
+    private(set) var presentCount = 0
     private let stateLock = NSLock()
 
     override init(frame: NSRect) {
@@ -68,8 +72,7 @@ final class StreamView: NSView {
             guard let self else { return }
             self.statusText = text
             self.updateStatusLayer()
-            self.needsDisplay = true
-            self.displayIfNeeded()
+            self.renderNow()
         }
     }
 
@@ -112,7 +115,7 @@ final class StreamView: NSView {
         super.setFrameSize(newSize)
         updateDrawableSize()
         updateStatusLayer()
-        needsDisplay = true
+        renderNow()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -139,8 +142,7 @@ final class StreamView: NSView {
             }
         }
         DispatchQueue.main.async { [weak self] in
-            self?.needsDisplay = true
-            self?.displayIfNeeded()
+            self?.renderNow()
         }
     }
 
@@ -157,6 +159,20 @@ final class StreamView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        renderNow()
+    }
+
+    /// Draws the current frame and presents it.
+    ///
+    /// AppKit never calls draw for a view whose backing layer is a
+    /// CAMetalLayer, so rendering is driven from here instead: when a frame
+    /// arrives, when the view resizes, and when status changes.
+    func renderNow() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.renderNow() }
+            return
+        }
+        drawCount += 1
         setupIfNeeded()
         updateDrawableSize()
         guard let device, let queue, let pipeline, let textureCache,
@@ -191,6 +207,7 @@ final class StreamView: NSView {
         }
 
         encoder.endEncoding()
+        presentCount += 1
         commandBuffer.present(drawable)
         commandBuffer.commit()
         _ = device
@@ -213,7 +230,7 @@ final class StreamView: NSView {
         window?.makeFirstResponder(self)
         setupIfNeeded()
         updateDrawableSize()
-        needsDisplay = true
+        renderNow()
         if trackingAreas.isEmpty {
             addTrackingArea(NSTrackingArea(rect: .zero,
                                            options: [.activeInKeyWindow, .mouseMoved, .inVisibleRect],

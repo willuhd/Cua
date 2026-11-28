@@ -274,6 +274,52 @@ enum SelfTest {
         }
     }
 
+    // MARK: - window render
+
+    /// Puts a StreamView in a real window and feeds it a frame, to find out
+    /// whether AppKit ever asks it to draw. Capture is not involved: the frame
+    /// is synthetic, so this needs no permission.
+    static func renderWindowCheck() -> Int32 {
+        say("window render check")
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+
+        let view = StreamView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
+                              styleMask: [.titled, .closable],
+                              backing: .buffered, defer: false)
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+        view.setStatus("check")
+
+        var source: CVPixelBuffer?
+        let attributes: [String: Any] = [kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+                                         kCVPixelBufferMetalCompatibilityKey as String: true]
+        CVPixelBufferCreate(kCFAllocatorDefault, 640, 360, kCVPixelFormatType_32BGRA,
+                            attributes as CFDictionary, &source)
+        if let source {
+            CVPixelBufferLockBaseAddress(source, [])
+            let stride = CVPixelBufferGetBytesPerRow(source)
+            let base = CVPixelBufferGetBaseAddress(source)!.assumingMemoryBound(to: UInt8.self)
+            for y in 0..<360 {
+                for x in 0..<640 {
+                    let p = y * stride + x * 4
+                    base[p] = 0; base[p + 1] = 0; base[p + 2] = 255; base[p + 3] = 255
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(source, [])
+            view.display(source)
+        }
+
+        let until = Date().addingTimeInterval(1.5)
+        while Date() < until { RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
+
+        say("  draws " + String(view.drawCount) + ", presents " + String(view.presentCount))
+        window.orderOut(nil)
+        window.contentView = nil
+        return view.drawCount > 0 && view.presentCount > 0 ? 0 : 1
+    }
+
     // MARK: - capture
 
     /// Whether screen capture can run at all on this machine. Exit 0 captured
