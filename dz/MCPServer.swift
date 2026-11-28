@@ -707,6 +707,10 @@ final class MCPServer: NSObject {
                 if let alias = obj["alias"] as? String { host.alias = alias.trimmingCharacters(in: .whitespacesAndNewlines) }
                 if let address = obj["address"] as? String { host.address = SavedHost.normalizedAddress(address) }
                 if let name = obj["profileName"] as? String { host.profileName = name.trimmingCharacters(in: .whitespacesAndNewlines) }
+                guard !host.alias.isEmpty, !host.address.isEmpty, !host.profileName.isEmpty else {
+                    send(fd, status: "400 Bad Request", body: Data("{\"error\":\"alias, address and profile name are required\"}".utf8))
+                    return
+                }
                 if let patch = obj["settings"] as? [String: Any] {
                     host.settings = StreamProfile.apply(patch, to: host.settings)
                 }
