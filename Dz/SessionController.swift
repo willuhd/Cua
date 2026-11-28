@@ -169,9 +169,14 @@ final class SessionController: NSObject {
 
 extension SessionController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
-        // Detach the window before anything else: AppKit is still finishing
-        // the close, and releasing it here is what was crashing.
-        window = nil
-        if role == .client { stop() }
+        // Nothing is released here. Dropping the last reference to a window
+        // inside its own close notification frees it while AppKit is still
+        // unwinding the close, which is what was taking the process down.
+        let closing = notification.object as? NSWindow
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.window === closing { self.window = nil }
+            if self.role == .client { self.stop() }
+        }
     }
 }

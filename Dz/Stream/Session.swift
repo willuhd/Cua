@@ -83,6 +83,10 @@ final class HostSession {
     }
 
     func start() async throws {
+        // Set before anything reads it: the accept loop exits immediately if
+        // the session does not consider itself running yet, and then no client
+        // is ever accepted.
+        stateLock.lock(); running = true; stateLock.unlock()
         let channel = try ControlChannel.listen(port: controlPort)
         control = channel
         channel.onMessage = { [weak self] message in
@@ -157,8 +161,14 @@ final class HostSession {
             self.encodeQueue.async { self.pipeline(buffer) }
         }
         source.onError = { error in NSLog("dz: capture error: %@", "\(error)") }
-        try await source.start()
-        stateLock.lock(); running = true; stateLock.unlock()
+        do {
+            try await source.start()
+        } catch {
+            stateLock.lock(); running = false; stateLock.unlock()
+            control?.close()
+            control = nil
+            throw error
+        }
     }
 
     private func pipeline(_ buffer: CVPixelBuffer) {
@@ -201,14 +211,16 @@ final class HostSession {
     }
 
     func stop() {
+        // Cleared first so the accept loop stops waiting before its listener
+        // is taken away underneath it.
+        stateLock.lock(); running = false; stateLock.unlock()
         clipboard.stop()
         statsTimer?.cancel()
+        statsTimer = nil
         // A frame may be mid-encode; the encoder must not be released under it.
         encodeQueue.sync { }
-        statsTimer = nil
         source.stop()
         control?.close()
-        stateLock.lock(); running = false; stateLock.unlock()
     }
 }
 

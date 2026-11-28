@@ -128,6 +128,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown { popover.close() }
         else { popVC.refresh(); popover.show(relativeTo: btn.bounds, of: btn, preferredEdge: .minY) }
     }
+    /// The window is a session, not the app. Closing it leaves dz running in
+    /// the menubar, which is the only way to reconnect.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         ForegroundCoordinator.shared.stop()
         MCPServer.shared.stop()
